@@ -10,7 +10,7 @@
 | # | Phase | Status |
 |---|-------|--------|
 | 0 | Project scaffolding (dirs, PLAN.md, notes, .gitignore) | ✅ Done |
-| 1 | Gmsh mesh generation | ⬜ Todo |
+| 1 | Gmsh mesh generation | ✅ Done |
 | 2 | C++ solver — libMesh FEMSystem (Taylor-Hood P2/P1) | ⬜ Todo |
 | 3 | Solver configuration — PETSc SNES + FGMRES + BoomerAMG | ⬜ Todo |
 | 4 | Output — ExodusII + drag/lift post-processing | ⬜ Todo |
