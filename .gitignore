@@ -3,8 +3,9 @@ build/
 *.o
 *.a
 
-# Generated mesh files (reproducible from channel.geo)
+# Generated mesh files (reproducible from channel.geo / generate_mesh.py)
 meshes/*.msh
+meshes/channel_coarse.msh
 
 # Simulation results
 results/

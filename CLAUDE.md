@@ -46,6 +46,15 @@ Simulate 2D incompressible viscous flow in a channel past a circular cylinder.
   result visualization
 - C++ code compiled via CMake; `CMakeLists.txt` finds libMesh/PETSc via environment variables
 
+## Testing
+- Every component must have a corresponding test in `tests/`
+- C++ tests are standalone executables registered with **CTest** (`add_test` in `tests/CMakeLists.txt`)
+- Python tests use Python's **`unittest`** framework; run with `python -m pytest tests/`
+- Tests must run on a **workstation without cluster access** — use a coarse mesh (lc_far=0.1)
+- Each test targets one logical component; do not bundle unrelated checks
+- Test files follow the same 300-line limit and Doxygen/docstring documentation rules
+- See `PLAN.md § Test Plan` for the specific pass/fail criteria per phase
+
 ## Output
 - Velocity and pressure fields in ExodusII format (`.e`, ParaView-compatible)
 - Console: per-Newton-iteration residual norm, total iterations, drag/lift coefficients C_D, C_L
