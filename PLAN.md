@@ -14,7 +14,7 @@
 | 2 | C++ solver — libMesh FEMSystem (Taylor-Hood P2/P1) | ⬜ Todo |
 | 3 | Solver configuration — PETSc SNES + FGMRES + BoomerAMG | ⬜ Todo |
 | 4 | Output — ExodusII + drag/lift post-processing | ⬜ Todo |
-| 5 | CMake build system | ⬜ Todo |
+| 5 | CMake build system | ✅ Done |
 | 6 | Python driver | ⬜ Todo |
 | 7 | Validation against benchmark | ⬜ Todo |
 
