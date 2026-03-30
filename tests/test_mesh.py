@@ -140,13 +140,11 @@ class TestMeshGeneration(unittest.TestCase):
         entities = gmsh.model.getEntities(dim=2)
         min_q = 1.0
         for _, tag in entities:
-            _, etypes, _ = gmsh.model.mesh.getElements(dim=2, tag=tag)
+            etypes, etags, _ = gmsh.model.mesh.getElements(dim=2, tag=tag)
             if not etypes:
                 continue
-            for etype in etypes:
-                q = gmsh.model.mesh.getElementQualities(
-                    gmsh.model.mesh.getElementsByType(etype)[0], "minSICN"
-                )
+            for tags in etags:
+                q = gmsh.model.mesh.getElementQualities(tags, "minSICN")
                 if len(q):
                     min_q = min(min_q, min(q))
         self.assertGreater(min_q, _MIN_QUALITY,
