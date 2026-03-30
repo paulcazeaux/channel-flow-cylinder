@@ -70,6 +70,7 @@ int main(int argc, char** argv)
     libMesh::Mesh mesh(init.comm());
     mesh.read(mesh_path);
     mesh.all_second_order(); // upgrade TRI3→TRI6 for P2/P1 Taylor-Hood
+    ChannelFlowSystem::tag_pressure_pin(mesh); // fix pressure null space
     libMesh::out << "  Elements: " << mesh.n_elem()
                  << "  Nodes: " << mesh.n_nodes() << "\n";
 
@@ -94,16 +95,23 @@ int main(int argc, char** argv)
     libMesh::out << "  DOFs: " << sys.n_dofs() << "\n";
 
     // ── Phase 3: PETSc KSP/PC options ─────────────────────────────────────
-    // Set programmatically so defaults are correct regardless of command line.
-    PetscOptionsSetValue(NULL, "-ksp_type",          "fgmres");
+    // FGMRES (restart=100) with ILU(ILU_FILL) on the full saddle-point system.
+    // BoomerAMG on the full coupled block does NOT converge: the pressure rows
+    // have a zero diagonal, violating AMG coarsening assumptions regardless of
+    // null-space handling.  The principled scalable alternative is a fieldsplit
+    // preconditioner (AMG on the (1,1) velocity block + Schur complement
+    // approximation for pressure), but ILU(k) is robust for the problem sizes
+    // targeted here (Re ≤ 20, moderate mesh).
+    PetscOptionsSetValue(NULL, "-ksp_type",         "fgmres");
     PetscOptionsSetValue(NULL, "-ksp_gmres_restart",
                          std::to_string(Params::GMRES_RESTART).c_str());
     PetscOptionsSetValue(NULL, "-ksp_rtol",
                          std::to_string(Params::KSP_RTOL).c_str());
     PetscOptionsSetValue(NULL, "-ksp_max_it",
                          std::to_string(Params::KSP_MAX_IT).c_str());
-    PetscOptionsSetValue(NULL, "-pc_type",           "hypre");
-    PetscOptionsSetValue(NULL, "-pc_hypre_type",     "boomeramg");
+    PetscOptionsSetValue(NULL, "-pc_type",          "ilu");
+    PetscOptionsSetValue(NULL, "-pc_factor_levels",
+                         std::to_string(Params::ILU_FILL).c_str());
 
     // ── Phase 3: Stokes initialisation → Navier-Stokes Newton ─────────────
     // A linear Stokes solve provides a good initial guess and avoids Newton

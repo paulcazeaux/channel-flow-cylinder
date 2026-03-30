@@ -7,7 +7,8 @@
 
 # ── Solver source files ───────────────────────────────────────────────────────
 set(SOLVER_SOURCES
-    channel_flow_system.cpp   # Phase 2: FEM assembly and BCs
+    channel_flow_system.cpp    # variable setup, Dirichlet BCs, mesh utilities
+    channel_flow_assembly.cpp  # weak-form element assembly (momentum + continuity)
 )
 
 # ── channel_flow_lib: reusable solver components ─────────────────────────────

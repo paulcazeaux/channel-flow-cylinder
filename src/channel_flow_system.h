@@ -21,6 +21,7 @@
 
 #include "libmesh/fem_system.h"
 #include "libmesh/function_base.h"
+#include "libmesh/mesh_base.h"
 
 #include <memory>
 #include <string>
@@ -82,6 +83,19 @@ public:
     unsigned int v_var() const { return _v_var; }
     /// Variable index for pressure (set during init_data).
     unsigned int p_var() const { return _p_var; }
+
+    /**
+     * @brief Tag the outlet-corner node with BID_PRESSURE_PIN so that
+     *        init_data() can apply a p=0 Dirichlet condition there.
+     *
+     * Must be called after mesh.all_second_order() and before
+     * EquationSystems::init().  Removes the pressure null space of the
+     * incompressible Stokes/NS system, which otherwise causes iterative
+     * solvers to stall on the full saddle-point matrix.
+     *
+     * @param mesh The mesh to annotate (modified in place).
+     */
+    static void tag_pressure_pin(libMesh::MeshBase& mesh);
 
     /**
      * @brief Enable or disable Stokes (linear) mode.

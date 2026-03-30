@@ -88,6 +88,7 @@ int main(int argc, char** argv)
     libMesh::Mesh mesh(init.comm());
     mesh.read(mesh_env);
     mesh.all_second_order(); // upgrade TRI3→TRI6 for P2/P1 Taylor-Hood
+    ChannelFlowSystem::tag_pressure_pin(mesh); // fix pressure null space
 
     if (mesh.n_elem() == 0) {
         std::cerr << "[test_stokes] FAIL: mesh is empty.\n";
@@ -112,16 +113,17 @@ int main(int argc, char** argv)
     es.init();
     libMesh::out << "[test_stokes] DOFs: " << sys.n_dofs() << "\n";
 
-    // ── 4. PETSc KSP/PC options ───────────────────────────────────────────────
-    // Use a direct LU solver for the test: the coarse mesh is small (~6k DOFs)
-    // and LU is unconditionally robust for saddle-point systems with a pressure
-    // null space.  Production (main.cpp) uses FGMRES + BoomerAMG; the test
-    // intentionally decouples solver robustness from physics verification.
-    PetscOptionsSetValue(NULL, "-ksp_type",  "gmres");
-    PetscOptionsSetValue(NULL, "-ksp_rtol",  "1e-12");
-    PetscOptionsSetValue(NULL, "-ksp_atol",  "1e-12");
-    PetscOptionsSetValue(NULL, "-ksp_max_it","1000");
-    PetscOptionsSetValue(NULL, "-pc_type",   "lu");
+    // ── 4. PETSc KSP/PC options — match production configuration ─────────────
+    PetscOptionsSetValue(NULL, "-ksp_type",         "fgmres");
+    PetscOptionsSetValue(NULL, "-ksp_gmres_restart",
+                         std::to_string(Params::GMRES_RESTART).c_str());
+    PetscOptionsSetValue(NULL, "-ksp_rtol",
+                         std::to_string(Params::KSP_RTOL).c_str());
+    PetscOptionsSetValue(NULL, "-ksp_max_it",
+                         std::to_string(Params::KSP_MAX_IT).c_str());
+    PetscOptionsSetValue(NULL, "-pc_type",          "ilu");
+    PetscOptionsSetValue(NULL, "-pc_factor_levels",
+                         std::to_string(Params::ILU_FILL).c_str());
 
     // ── 5. Stokes solve ───────────────────────────────────────────────────────
     libMesh::out << "[test_stokes] Running Stokes linear solve...\n";
