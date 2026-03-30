@@ -4,13 +4,10 @@
 # Target layout:
 #   channel_flow_lib  STATIC  — solver components (no main); linked by tests
 #   channel_flow      EXE     — main entry point, links channel_flow_lib
-#
-# Phase 5: SOLVER_SOURCES is empty; channel_flow_lib is not created yet.
-# Phase 2: add channel_flow_system.cpp to SOLVER_SOURCES and uncomment the lib.
 
-# ── Solver source files (populated in Phase 2) ───────────────────────────────
+# ── Solver source files ───────────────────────────────────────────────────────
 set(SOLVER_SOURCES
-    # channel_flow_system.cpp   # Phase 2: FEM assembly and BCs
+    channel_flow_system.cpp   # Phase 2: FEM assembly and BCs
 )
 
 # ── channel_flow_lib: reusable solver components ─────────────────────────────

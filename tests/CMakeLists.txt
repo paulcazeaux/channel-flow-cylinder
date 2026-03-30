@@ -38,7 +38,7 @@ macro(add_solver_test name source)
 endmacro()
 
 # ── Phase 2: FEM space initialisation ────────────────────────────────────────
-# add_solver_test(test_spaces test_spaces.cpp)   # uncomment after Phase 2
+add_solver_test(test_spaces test_spaces.cpp)
 
 # ── Phase 3: Stokes linear solve ─────────────────────────────────────────────
 # add_solver_test(test_stokes test_stokes.cpp)   # uncomment after Phase 3
