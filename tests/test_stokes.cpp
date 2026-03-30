@@ -33,8 +33,19 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <vector>
+
+/// @brief Format a double for PetscOptionsSetValue using scientific notation.
+/// std::to_string uses %f and silently truncates values like 1e-10 to "0.000000".
+static std::string petsc_str(double v)
+{
+    std::ostringstream ss;
+    ss << std::scientific << std::setprecision(6) << v;
+    return ss.str();
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -117,8 +128,7 @@ int main(int argc, char** argv)
     PetscOptionsSetValue(NULL, "-ksp_type",         "fgmres");
     PetscOptionsSetValue(NULL, "-ksp_gmres_restart",
                          std::to_string(Params::GMRES_RESTART).c_str());
-    PetscOptionsSetValue(NULL, "-ksp_rtol",
-                         std::to_string(Params::KSP_RTOL).c_str());
+    PetscOptionsSetValue(NULL, "-ksp_rtol",         petsc_str(Params::KSP_RTOL).c_str());
     PetscOptionsSetValue(NULL, "-ksp_max_it",
                          std::to_string(Params::KSP_MAX_IT).c_str());
     PetscOptionsSetValue(NULL, "-pc_type",          "ilu");

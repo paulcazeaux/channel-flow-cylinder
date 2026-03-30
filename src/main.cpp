@@ -25,8 +25,19 @@
 #include <petscsys.h>
 
 #include <iostream>
+#include <iomanip>
+#include <sstream>
 #include <string>
 #include <cstring>
+
+/// @brief Format a double for PetscOptionsSetValue using scientific notation.
+/// std::to_string uses %f (6 decimal places) and truncates values like 1e-10 to "0.000000".
+static std::string petsc_str(double v)
+{
+    std::ostringstream ss;
+    ss << std::scientific << std::setprecision(6) << v;
+    return ss.str();
+}
 
 /// @brief Parse --mesh and --help flags from argv; return mesh path or "".
 static std::string parse_args(int argc, char** argv)
@@ -105,8 +116,7 @@ int main(int argc, char** argv)
     PetscOptionsSetValue(NULL, "-ksp_type",         "fgmres");
     PetscOptionsSetValue(NULL, "-ksp_gmres_restart",
                          std::to_string(Params::GMRES_RESTART).c_str());
-    PetscOptionsSetValue(NULL, "-ksp_rtol",
-                         std::to_string(Params::KSP_RTOL).c_str());
+    PetscOptionsSetValue(NULL, "-ksp_rtol",         petsc_str(Params::KSP_RTOL).c_str());
     PetscOptionsSetValue(NULL, "-ksp_max_it",
                          std::to_string(Params::KSP_MAX_IT).c_str());
     PetscOptionsSetValue(NULL, "-pc_type",          "ilu");

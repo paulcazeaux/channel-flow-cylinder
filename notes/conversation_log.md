@@ -490,3 +490,82 @@ be implemented before attempting very fine production meshes.
 - Drag/lift post-processing: boundary integral over cylinder surface (BID 4)
 - `tests/test_output.cpp` — verify file written, readable, drag finite, lift ≈ 0 (Stokes)
 - Future: fieldsplit preconditioner (AMG on velocity block + Schur for pressure)
+
+---
+
+## 2026-03-30 — Session 8: KSP convergence diagnosis and std::to_string bug
+
+**Topics:** Diagnosing why KSP reported 500 iterations and DIVERGED_ITS despite the
+residual appearing to satisfy the tolerance; finding and fixing the root cause.
+
+### The false convergence story (retracted)
+
+After Session 7 the KSP output showed "Linear solve finished, step 500, residual
+4.80055e-33" and "DIVERGED_ITS".  I initially offered incorrect explanations:
+
+1. **First claim (wrong):** "ILU(2) needs 500 iterations for a 6k saddle-point
+   system; the residual happened to be near zero at the last step because FGMRES
+   with restart=100 only checks convergence at restart boundaries."
+
+   The user correctly pointed out: if the residual at step 500 is essentially zero,
+   it cannot be above the tolerance at step 499 (restarted FGMRES is monotone
+   *within* each cycle).
+
+2. **Second claim (wrong):** "The residual might have been above the tolerance at
+   step 499 and fell sharply at step 500 because of how the Krylov subspace fills."
+
+   The user added: the problem is linear (Stokes mode), so we should have exactly
+   one Newton iteration; the claim about FGMRES stagnation behavior was speculative
+   and not supported.
+
+The user asked to add `-ksp_monitor -ksp_converged_reason`.  The monitor trace
+showed the residual satisfying the 3.97e-8 tolerance at step 26 (1.76e-8 < 3.97e-8)
+yet the solver continued to step 500.  Combined with `-ksp_view` showing
+`tolerances: relative=0., absolute=1e-50`, the actual root cause became clear.
+
+### Root cause: std::to_string truncates small floats to zero
+
+```cpp
+std::to_string(1e-10)  // produces "0.000000"  (printf %f, 6 decimal places)
+std::to_string(1e-8)   // produces "0.000000"
+```
+
+All floating-point tolerances passed to `PetscOptionsSetValue` via `std::to_string`
+were silently converted to the string "0.000000", which PETSc read as rtol=0 and
+atol=0.  PETSc's convergence criterion was therefore never satisfiable by residual,
+and the solver always ran to `max_it` (500), exiting with DIVERGED_ITS.
+
+The integer parameters (`GMRES_RESTART=100`, `KSP_MAX_IT=500`, `ILU_FILL=2`) were
+unaffected because `std::to_string(int)` produces the correct decimal string.
+This is why `max_it=500` was respected but `ksp_rtol=1e-10` was not.
+
+### Fix
+
+Replaced `std::to_string(double)` with a `petsc_str()` helper in `main.cpp` and
+`test_stokes.cpp`:
+```cpp
+static std::string petsc_str(double v) {
+    std::ostringstream ss;
+    ss << std::scientific << std::setprecision(6) << v;
+    return ss.str();
+}
+```
+`petsc_str(1e-10)` → `"1.000000e-10"`, which PETSc reads correctly.
+
+### Verified behaviour after fix
+
+```
+35 KSP Residual norm 1.51e-12
+Linear solve converged due to CONVERGED_RTOL iterations 35
+```
+The Stokes linear system now converges in **35 FGMRES iterations** (down from 500),
+with `CONVERGED_RTOL`.  ILU(2) is an effective preconditioner for this problem
+once the tolerance is actually communicated to PETSc.
+
+### Files modified this session
+- `src/main.cpp` — replaced `std::to_string(KSP_RTOL)` with `petsc_str()`
+- `tests/test_stokes.cpp` — same fix; added `petsc_str()` helper
+
+### Next steps (Phase 4)
+- ExodusII output and drag/lift coefficients
+- Add `petsc_str` to a shared utility header to avoid duplication
