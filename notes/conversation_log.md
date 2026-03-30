@@ -145,3 +145,41 @@ Phase 5 (CMake build system).
 - Configure PETSc SNES/KSP: FGMRES (restart=100) + BoomerAMG via command-line flags
 - Implement Stokes → Navier-Stokes initialization sequence in main.cpp
 - `tests/test_stokes.cpp` — verify Stokes solve converges, residual < 1e-8
+
+---
+
+## 2026-03-30 — Session 4: Testing, spack setup, libMesh/PETSc install
+
+**Topics:** Running Phase 1 tests, discovering missing HPC libraries, bootstrapping spack.
+
+### Actions taken
+
+**Phase 1 tests (Python):**
+- `python3 -m pytest tests/test_mesh.py` — 9/9 pass after fixing `test_no_degenerate_elements`
+  (already committed as `1a48a00` in Session 3; confirmed clean on pull)
+
+**Library discovery:**
+- libMesh and PETSc are no longer available as Oscar system modules
+- No pre-existing user install found under `~/` or anywhere in `/oscar/rt`
+- System spack tree at `/oscar/rt/9.6/25/spack` has no spack CLI and no petsc/libmesh packages
+
+**Spack bootstrap:**
+- Cloned spack 0.23.1 to `~/data/spack` (more quota headroom than `~/`)
+- Compiler registered: gcc@11.5.0, os=oracle9 (`~/.spack/linux/compilers.yaml`)
+- Externals registered (`~/.spack/packages.yaml`):
+  - `openmpi@4.1.8` — `/oscar/rt/9.6/25/spack/x86_64_v3/openmpi-4.1.8-…`
+  - `cmake@3.26.5` — `/usr`
+- Activation: `source ~/data/spack/share/spack/setup-env.sh`
+
+**libMesh + PETSc install (in progress):**
+- Spec: `libmesh@1.7.1+exodusii+mpi+petsc%gcc@11.5.0`
+- PETSc will include: Hypre (BoomerAMG), SuperLU-dist, HDF5, METIS/ParMETIS
+- Build launched with `spack install --jobs 8 libmesh+exodusii+mpi+petsc`
+- Log: `~/data/spack_install.log`
+- Session ended while build was still running
+
+### Next steps
+- Confirm spack build completes successfully
+- `spack load libmesh` and verify `libmesh-config` is on PATH
+- `cmake -DLIBMESH_DIR=$(spack location -i libmesh) -B build .` and build project
+- Run `ctest` to execute `test_spaces` (Phase 2 C++ test)
