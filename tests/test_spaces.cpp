@@ -81,6 +81,7 @@ int main(int argc, char** argv)
 
     libMesh::Mesh mesh(init.comm());
     mesh.read(mesh_env);
+    mesh.all_second_order(); // upgrade TRI3→TRI6 for P2/P1 Taylor-Hood
 
     if (mesh.n_elem() == 0) {
         std::cerr << "[test_spaces] FAIL: mesh is empty.\n";

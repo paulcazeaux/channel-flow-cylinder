@@ -67,6 +67,7 @@ int main(int argc, char** argv)
     // ── Load mesh ──────────────────────────────────────────────────────────
     libMesh::Mesh mesh(init.comm());
     mesh.read(mesh_path);
+    mesh.all_second_order(); // upgrade TRI3→TRI6 for P2/P1 Taylor-Hood
     libMesh::out << "  Elements: " << mesh.n_elem()
                  << "  Nodes: " << mesh.n_nodes() << "\n";
 

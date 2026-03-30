@@ -31,7 +31,7 @@ macro(add_solver_test name source)
     add_executable(${name} ${source})
     target_include_directories(${name} PRIVATE "${CMAKE_SOURCE_DIR}/src")
     target_link_libraries(${name} PRIVATE channel_flow_lib)
-    add_test(NAME ${name} COMMAND ${name})
+    add_test(NAME ${name} COMMAND mpirun -n 1 ${name})
     set_tests_properties(${name} PROPERTIES
         ENVIRONMENT "TEST_MESH=${COARSE_MESH}"
         TIMEOUT 120)

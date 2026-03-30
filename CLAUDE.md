@@ -58,3 +58,9 @@ Simulate 2D incompressible viscous flow in a channel past a circular cylinder.
 ## Output
 - Velocity and pressure fields in ExodusII format (`.e`, ParaView-compatible)
 - Console: per-Newton-iteration residual norm, total iterations, drag/lift coefficients C_D, C_L
+
+## Session Logging
+- **At the end of every session, append an entry to `notes/conversation_log.md`** before committing.
+- Each entry must include: date, session number, topics covered, decisions made with rationale,
+  files created/modified, and next steps.
+- Do not edit past entries — append only.
