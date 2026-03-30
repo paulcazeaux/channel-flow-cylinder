@@ -188,40 +188,30 @@ bool ChannelFlowSystem::element_time_derivative(bool request_jacobian,
             const libMesh::Real          phi_i  = phi[i][qp];
             const libMesh::RealGradient& dphi_i = dphi[i][qp];
 
-            // Momentum (x): ν ∇u·∇w + (u·∇u)w − p ∂w/∂x
-            Fu(i) += jxw * (
-                nu * (grad_u * dphi_i)
-              + (u * grad_u(0) + v * grad_u(1)) * phi_i
-              - p * dphi_i(0)
-            );
-
-            // Momentum (y): ν ∇v·∇w + (u·∇v)w − p ∂w/∂y
-            Fv(i) += jxw * (
-                nu * (grad_v * dphi_i)
-              + (u * grad_v(0) + v * grad_v(1)) * phi_i
-              - p * dphi_i(1)
-            );
+            // Momentum (x): ν ∇u·∇w − p ∂w/∂x  [+ advection if !stokes_mode]
+            Fu(i) += jxw * (nu * (grad_u * dphi_i) - p * dphi_i(0));
+            Fv(i) += jxw * (nu * (grad_v * dphi_i) - p * dphi_i(1));
+            if (!_stokes_mode) {
+                Fu(i) += jxw * (u * grad_u(0) + v * grad_u(1)) * phi_i;
+                Fv(i) += jxw * (u * grad_v(0) + v * grad_v(1)) * phi_i;
+            }
 
             if (request_jacobian) {
                 for (std::size_t j = 0; j < n_u_dofs; ++j) {
                     const libMesh::Real          phi_j  = phi[j][qp];
                     const libMesh::RealGradient& dphi_j = dphi[j][qp];
 
-                    // K_uu: d(F_u)/d(δu)
-                    (*Kuu)(i,j) += jxw * (
-                        nu * (dphi_j * dphi_i)
-                      + (phi_j * grad_u(0) + u * dphi_j(0) + v * dphi_j(1)) * phi_i
-                    );
-                    // K_uv: d(F_u)/d(δv)
-                    (*Kuv)(i,j) += jxw * (phi_j * grad_u(1) * phi_i);
+                    // Viscous contributions (always present)
+                    (*Kuu)(i,j) += jxw * nu * (dphi_j * dphi_i);
+                    (*Kvv)(i,j) += jxw * nu * (dphi_j * dphi_i);
 
-                    // K_vu: d(F_v)/d(δu)
-                    (*Kvu)(i,j) += jxw * (phi_j * grad_v(0) * phi_i);
-                    // K_vv: d(F_v)/d(δv)
-                    (*Kvv)(i,j) += jxw * (
-                        nu * (dphi_j * dphi_i)
-                      + (u * dphi_j(0) + phi_j * grad_v(1) + v * dphi_j(1)) * phi_i
-                    );
+                    // Advection Jacobian (suppressed in Stokes mode)
+                    if (!_stokes_mode) {
+                        (*Kuu)(i,j) += jxw * (phi_j * grad_u(0) + u * dphi_j(0) + v * dphi_j(1)) * phi_i;
+                        (*Kuv)(i,j) += jxw * phi_j * grad_u(1) * phi_i;
+                        (*Kvu)(i,j) += jxw * phi_j * grad_v(0) * phi_i;
+                        (*Kvv)(i,j) += jxw * (u * dphi_j(0) + phi_j * grad_v(1) + v * dphi_j(1)) * phi_i;
+                    }
                 }
                 for (std::size_t j = 0; j < n_p_dofs; ++j) {
                     const libMesh::Real psi_j = psi[j][qp];

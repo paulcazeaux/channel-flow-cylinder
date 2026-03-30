@@ -262,3 +262,69 @@ runtime issues; all C++ tests passing.
 - Configure PETSc SNES/KSP: FGMRES (restart=100) + BoomerAMG via command-line flags
 - Implement Stokes → Navier-Stokes initialization sequence in `main.cpp`
 - `tests/test_stokes.cpp` — verify Stokes solve converges, residual < 1e-8
+
+---
+
+## 2026-03-30 — Session 6: Phase 3 solver review and test_stokes
+
+**Topics:** Reviewed Phase 3 solver configuration code (written in a prior sub-session);
+discussed parameter choices; wrote and ran `tests/test_stokes.cpp`.
+
+### Solver parameter review
+
+The Phase 3 modifications to `src/main.cpp`, `src/channel_flow_system.h`, and
+`src/channel_flow_system.cpp` were inspected and the following design decisions were
+confirmed or flagged:
+
+**FGMRES over standard GMRES:**
+- Correct choice: BoomerAMG applies a different linear solve on each application,
+  making it a variable preconditioner.  Standard GMRES loses orthogonality guarantees
+  with variable preconditioners; FGMRES handles this correctly.
+
+**GMRES restart = 100:**
+- Reasonable for O(10k–50k) DOF saddle-point systems.  Too small → slow convergence
+  from frequent restarts; too large → O(restart²) memory growth.
+
+**KSP_RTOL = 1e-10 (same as SNES_RTOL):**
+- This is tight. Newton does not need the linear subproblem solved to full accuracy
+  on early iterations (inexact Newton / Eisenstat-Walker strategy would be better).
+  However, the current setting is not incorrect; it just does extra work on early
+  Newton steps.  Revisit if solve times are too long on finer meshes.
+
+**BoomerAMG on the full saddle-point block:**
+- Not the textbook-optimal choice (block Schur / fieldsplit preconditioners are
+  better for large Re or fine meshes), but empirically effective at low Re (≤ 20)
+  where the system is viscosity-dominated.  Accepted for now; will revisit if
+  KSP iteration counts become large.
+
+**Stokes → Navier-Stokes initialization:**
+- Solves the linear Stokes problem first (set_stokes_mode(true)) to obtain a
+  physically reasonable initial velocity field, then switches to full NS for the
+  Newton iteration.  Prevents Newton divergence from a zero initial guess, especially
+  at Re > 1.  Stokes is linear so Newton takes exactly one step.
+
+**Pressure null space:**
+- With do-nothing (Neumann) outlet and Dirichlet conditions elsewhere, the pressure
+  is determined only up to an additive constant.  PETSc/libMesh may or may not
+  handle this automatically.  If the Stokes solve produces a pressure that drifts
+  or KSP stalls, a pressure pin (fix p = 0 at one outlet node) should be added.
+  Flagged as a potential issue to watch during test execution.
+
+### Decisions made
+
+- No changes to existing Phase 3 code; confirmed correct as written.
+- `tests/test_stokes.cpp` written to verify: (1) Newton converges in 1 step,
+  (2) final nonlinear residual < SNES_ATOL, (3) no-slip BCs satisfied on walls
+  and cylinder, (4) inlet u-velocity is non-zero (sanity).
+- `tests/CMakeLists.txt` updated: `add_solver_test(test_stokes ...)` uncommented.
+
+### Files created/modified this session
+- `tests/test_stokes.cpp` — new
+- `tests/CMakeLists.txt` — uncommented test_stokes
+- `PLAN.md` — Phase 3 marked done
+- `notes/conversation_log.md` — this entry
+
+### Next steps (Phase 4)
+- ExodusII output: write velocity/pressure fields to `results/channel_flow.e`
+- Drag/lift post-processing: boundary integral over cylinder surface (BID 4)
+- `tests/test_output.cpp` — verify file written, readable, drag finite, lift ≈ 0 (Stokes)

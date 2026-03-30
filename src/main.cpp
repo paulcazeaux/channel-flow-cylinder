@@ -22,6 +22,8 @@
 #include "libmesh/steady_solver.h"
 #include "libmesh/newton_solver.h"
 
+#include <petscsys.h>
+
 #include <iostream>
 #include <string>
 #include <cstring>
@@ -91,11 +93,30 @@ int main(int argc, char** argv)
 
     libMesh::out << "  DOFs: " << sys.n_dofs() << "\n";
 
-    // ── Solve ──────────────────────────────────────────────────────────────
-    // Phase 3 will configure KSP/PC options via PETSc command-line flags.
-    // Phase 4 will write ExodusII output and compute drag/lift coefficients.
+    // ── Phase 3: PETSc KSP/PC options ─────────────────────────────────────
+    // Set programmatically so defaults are correct regardless of command line.
+    PetscOptionsSetValue(NULL, "-ksp_type",          "fgmres");
+    PetscOptionsSetValue(NULL, "-ksp_gmres_restart",
+                         std::to_string(Params::GMRES_RESTART).c_str());
+    PetscOptionsSetValue(NULL, "-ksp_rtol",
+                         std::to_string(Params::KSP_RTOL).c_str());
+    PetscOptionsSetValue(NULL, "-ksp_max_it",
+                         std::to_string(Params::KSP_MAX_IT).c_str());
+    PetscOptionsSetValue(NULL, "-pc_type",           "hypre");
+    PetscOptionsSetValue(NULL, "-pc_hypre_type",     "boomeramg");
+
+    // ── Phase 3: Stokes initialisation → Navier-Stokes Newton ─────────────
+    // A linear Stokes solve provides a good initial guess and avoids Newton
+    // divergence from a zero velocity field (critical at Re > 1).
+    libMesh::out << "Phase 3a: Stokes initialisation (linear solve)...\n";
+    sys.set_stokes_mode(true);
     sys.solve();
 
+    libMesh::out << "Phase 3b: Navier-Stokes Newton iteration...\n";
+    sys.set_stokes_mode(false);
+    sys.solve();
+
+    // Phase 4 will write ExodusII output and compute drag/lift coefficients.
     libMesh::out << "Solve complete.\n";
     return 0;
 }

@@ -83,10 +83,22 @@ public:
     /// Variable index for pressure (set during init_data).
     unsigned int p_var() const { return _p_var; }
 
+    /**
+     * @brief Enable or disable Stokes (linear) mode.
+     *
+     * When true, advection terms (u·∇)u are suppressed in assembly, reducing
+     * Navier-Stokes to the linear Stokes problem.  Newton converges in exactly
+     * one iteration, providing a cheap initial guess for the full NS solve.
+     */
+    void set_stokes_mode(bool stokes) { _stokes_mode = stokes; }
+    bool stokes_mode() const { return _stokes_mode; }
+
 private:
     unsigned int _u_var; ///< P2 x-velocity variable index
     unsigned int _v_var; ///< P2 y-velocity variable index
     unsigned int _p_var; ///< P1 pressure variable index
+
+    bool _stokes_mode = false; ///< Suppress advection for Stokes initialisation
 
     /// Owned parabolic inlet profile; kept alive for DirichletBoundary lifetime.
     std::unique_ptr<libMesh::FunctionBase<libMesh::Number>> _inlet_u_func;
