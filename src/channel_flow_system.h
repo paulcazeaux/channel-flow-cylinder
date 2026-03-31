@@ -22,6 +22,7 @@
 #include "libmesh/fem_system.h"
 #include "libmesh/function_base.h"
 #include "libmesh/mesh_base.h"
+#include "libmesh/newton_solver.h"
 
 #include <memory>
 #include <string>
@@ -96,6 +97,23 @@ public:
      * @param mesh The mesh to annotate (modified in place).
      */
     static void tag_pressure_pin(libMesh::MeshBase& mesh);
+
+    /**
+     * @brief Configure PETSc fieldsplit preconditioner on the Newton solver's KSP.
+     *
+     * Must be called after EquationSystems::init() and before the first solve().
+     * Partitions DOFs into velocity (u,v) and pressure (p) index sets, sets
+     * pc_type=fieldsplit with Schur factorisation, and assigns BoomerAMG to the
+     * velocity sub-PC.  Sub-PC options must be set via PetscOptionsSetValue before
+     * this call.
+     *
+     * @param sys    Initialised ChannelFlowSystem (variable indices + DofMap).
+     * @param mesh   The mesh (iterated for DOF collection).
+     * @param newton Newton solver owning the KSP to configure.
+     */
+    static void configure_fieldsplit(ChannelFlowSystem& sys,
+                                     libMesh::MeshBase& mesh,
+                                     libMesh::NewtonSolver& newton);
 
     /**
      * @brief Enable or disable Stokes (linear) mode.

@@ -51,14 +51,14 @@ constexpr int    SNES_MAX_IT = 50;     ///< Maximum Newton iterations
 constexpr double SNES_ATOL   = 1.0e-8; ///< Absolute nonlinear residual tolerance
 constexpr double SNES_RTOL   = 1.0e-10;///< Relative nonlinear residual tolerance
 
-// ── Linear solver: FGMRES + ILU (per Newton step) ────────────────────────────
-// ILU(ILU_FILL) preconditions the full saddle-point system.  BoomerAMG on the
-// coupled block stalls because pressure rows have zero diagonal; the scalable
-// alternative (fieldsplit AMG) is deferred to a later phase.
-constexpr int    KSP_MAX_IT    = 500;    ///< Maximum Krylov iterations
-constexpr double KSP_RTOL      = 1.0e-10;///< Relative linear residual tolerance
+// ── Linear solver: FGMRES + fieldsplit Schur (per Newton step) ───────────────
+// Velocity block (u,v) preconditioned by BoomerAMG; pressure block by Jacobi
+// on the assembled Sp approximation (selfp).  Lower-triangular Schur
+// factorisation captures the velocity-pressure coupling.
+// Linear tolerance is set adaptively by libMesh's inexact-Newton framework;
+// we only cap the maximum iteration count.
+constexpr int    KSP_MAX_IT    = 200;    ///< Maximum Krylov iterations per Newton step
 constexpr int    GMRES_RESTART = 100;    ///< FGMRES restart parameter
-constexpr int    ILU_FILL      = 2;      ///< ILU fill level (pc_factor_levels)
 
 // ── Drag/lift normalisation ───────────────────────────────────────────────────
 ///   C_D = 2 F_D / (ρ U_MEAN² D),   C_L = 2 F_L / (ρ U_MEAN² D)

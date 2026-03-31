@@ -18,9 +18,15 @@
 #include "libmesh/libmesh_common.h"
 #include "libmesh/boundary_info.h"
 #include "libmesh/node.h"
+#include "libmesh/petsc_linear_solver.h"
 
+#include <petscpc.h>
+#include <petscis.h>
+
+#include <algorithm>
 #include <limits>
 #include <set>
+#include <vector>
 
 // ── Inlet velocity function ───────────────────────────────────────────────────
 
@@ -151,6 +157,70 @@ void ChannelFlowSystem::init_data()
 
     // ── Delegate to parent to finalize variable/DOF setup ─────────────────────
     this->FEMSystem::init_data();
+}
+
+void ChannelFlowSystem::configure_fieldsplit(ChannelFlowSystem& sys,
+                                              libMesh::MeshBase& mesh,
+                                              libMesh::NewtonSolver& newton)
+{
+    // Ensure the linear solver is created (reinit allocates _linear_solver).
+    newton.reinit();
+
+    // Obtain the PETSc KSP handle from libMesh's linear solver.
+    auto& ls = libMesh::cast_ref<
+        libMesh::PetscLinearSolver<libMesh::Number>&>(newton.get_linear_solver());
+    KSP ksp = ls.ksp();   // calls ls.init() internally if needed
+
+    PC pc;
+    KSPGetPC(ksp, &pc);
+
+    // ── Collect velocity and pressure DOF indices ─────────────────────────────
+    const libMesh::DofMap& dof_map = sys.get_dof_map();
+    std::vector<libMesh::dof_id_type> dofs;
+    std::vector<PetscInt> vel_ids, p_ids;
+
+    for (const auto* node : mesh.local_node_ptr_range()) {
+        dof_map.dof_indices(node, dofs, sys.u_var());
+        for (auto d : dofs) vel_ids.push_back(static_cast<PetscInt>(d));
+
+        dof_map.dof_indices(node, dofs, sys.v_var());
+        for (auto d : dofs) vel_ids.push_back(static_cast<PetscInt>(d));
+
+        dof_map.dof_indices(node, dofs, sys.p_var());
+        for (auto d : dofs) p_ids.push_back(static_cast<PetscInt>(d));
+    }
+
+    // Sort and deduplicate (P2 nodes are shared between elements).
+    std::sort(vel_ids.begin(), vel_ids.end());
+    vel_ids.erase(std::unique(vel_ids.begin(), vel_ids.end()), vel_ids.end());
+    std::sort(p_ids.begin(), p_ids.end());
+    p_ids.erase(std::unique(p_ids.begin(), p_ids.end()), p_ids.end());
+
+    // ── Create PETSc index sets and configure fieldsplit ──────────────────────
+    IS vel_is, p_is;
+    ISCreateGeneral(PETSC_COMM_WORLD,
+                    static_cast<PetscInt>(vel_ids.size()), vel_ids.data(),
+                    PETSC_COPY_VALUES, &vel_is);
+    ISCreateGeneral(PETSC_COMM_WORLD,
+                    static_cast<PetscInt>(p_ids.size()), p_ids.data(),
+                    PETSC_COPY_VALUES, &p_is);
+
+    PCSetType(pc, PCFIELDSPLIT);
+    PCFieldSplitSetType(pc, PC_COMPOSITE_SCHUR);
+    PCFieldSplitSetSchurFactType(pc, PC_FIELDSPLIT_SCHUR_FACT_LOWER);
+    // Sp = A10 * Diag(A00)^{-1} * A01: assembled Schur approximation (selfp).
+    // LOWER factorisation captures velocity-pressure coupling; 35 iters on the
+    // 6k-DOF coarse mesh (vs 176 for DIAG).
+    PCFieldSplitSetSchurPre(pc, PC_FIELDSPLIT_SCHUR_PRE_SELFP, NULL);
+    PCFieldSplitSetIS(pc, "velocity", vel_is);
+    PCFieldSplitSetIS(pc, "pressure", p_is);
+
+    // The PC retains its own reference; safe to release ours.
+    ISDestroy(&vel_is);
+    ISDestroy(&p_is);
+
+    libMesh::out << "[configure_fieldsplit] velocity DOFs: " << vel_ids.size()
+                 << "  pressure DOFs: " << p_ids.size() << "\n";
 }
 
 void ChannelFlowSystem::init_context(libMesh::DiffContext& ctx)

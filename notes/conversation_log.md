@@ -569,3 +569,92 @@ once the tolerance is actually communicated to PETSc.
 ### Next steps (Phase 4)
 - ExodusII output and drag/lift coefficients
 - Add `petsc_str` to a shared utility header to avoid duplication
+
+---
+
+## 2026-03-30 — Session 9: Fieldsplit AMG Preconditioner
+
+**Topics:** Block Schur complement preconditioner; programmatic PETSc IS configuration;
+`petsc_str` consolidation; debugging `pc_fieldsplit_schur_pre_type` options parsing.
+
+### Motivation
+
+ILU(2) converges in ~35 iterations on the 6k-DOF coarse mesh but its iteration
+count grows with mesh size.  For production runs (50k–200k DOFs) a scalable
+preconditioner is needed.
+
+### Implementation
+
+The standard scalable preconditioner for velocity-pressure saddle-point systems
+is the block Schur complement (Silvester & Wathen 1994):
+
+```
+P = [A   0]     A → BoomerAMG (mesh-independent V-cycle)
+    [B  -S̃]     S̃ → Jacobi on Sp (assembled Schur approximation)
+```
+
+PETSc's `-pc_type fieldsplit` supports this, but it requires the velocity and
+pressure DOF index sets to be registered programmatically via `PCFieldSplitSetIS`
+(cannot be done through `PetscOptionsSetValue` alone).
+
+**New function:** `ChannelFlowSystem::configure_fieldsplit(sys, mesh, newton)`
+- Calls `newton.reinit()` to ensure the linear solver is created
+- Casts to `PetscLinearSolver`, calls `.ksp()` to get the KSP handle
+- Iterates mesh nodes and partitions DOFs into velocity (u+v) and pressure index sets
+- Calls `PCFieldSplitSetIS`, `PCFieldSplitSetSchurFactType`, `PCFieldSplitSetSchurPre`
+  programmatically (not via options strings, which were silently ignored)
+- Sub-PC options (`-fieldsplit_velocity_pc_type hypre`, etc.) still set via
+  `PetscOptionsSetValue` and picked up at `PCSetUp` time
+
+**New file:** `src/petsc_utils.h` — moves the `petsc_str()` helper out of
+`main.cpp` and `test_stokes.cpp` to eliminate duplication.
+
+### Key debugging findings
+
+1. **`pc_fieldsplit_schur_pre_type a11/selfp` was silently ignored.**
+   PETSc's `PCFieldSplitSetFromOptions` only reads `schur_pre_type` when
+   `PC_FIELDSPLIT_SCHUR_FACT_*` is already set to a Schur type at the time
+   options are processed.  The option was always reported as "unused".
+   Fix: call `PCFieldSplitSetSchurPre(pc, PC_FIELDSPLIT_SCHUR_PRE_SELFP, NULL)`
+   directly in C++.
+
+2. **`DIAG` vs `LOWER` factorisation.**
+   - `PC_FIELDSPLIT_SCHUR_FACT_DIAG`: treats velocity and pressure blocks
+     independently; 176 FGMRES iterations on the coarse mesh.
+   - `PC_FIELDSPLIT_SCHUR_FACT_LOWER`: lower-triangular block factorisation,
+     captures the velocity-pressure coupling term B*A⁻¹ applied to the residual
+     before the pressure correction; **35 iterations** — matches ILU(2) exactly.
+
+3. **ILU for pressure sub-PC broke convergence.**
+   The assembled Sp = A10 Diag(A00)⁻¹ A01 has negative diagonal entries (our
+   continuity sign convention: -∫q∇·u dx → B = -divergence).  ILU factorisation
+   encountered negative pivots and diverged.  Jacobi on the negative diagonal is
+   mathematically stable (scales by -1/diagonal).
+
+4. **`-ksp_rtol` override was preventing convergence.**
+   libMesh's `NewtonSolver` computes an adaptive linear solve tolerance each step
+   (e.g., 3.97e-08 for the Stokes step).  Our `PetscOptionsSetValue("-ksp_rtol",
+   "1e-10")` was applied AFTER libMesh's `KSPSetTolerances` call (via
+   `KSPSetFromOptions` in `PetscLinearSolver::solve()`), overriding the adaptive
+   tolerance with a much tighter one (1e-10), forcing the solver to run to max_it.
+   Fix: removed the `-ksp_rtol` option; linear tolerance is now set exclusively
+   by libMesh's inexact-Newton framework.  `KSP_RTOL` removed from `params.h`.
+
+### Result
+
+Both tests pass.  `test_stokes`: 35 FGMRES iterations, 1 Newton step,
+`CONVERGED_RTOL`.  The preconditioner is mesh-scalable (BoomerAMG + Schur).
+
+### Files created/modified
+- `src/petsc_utils.h` — new: `petsc_str()` helper (eliminates duplication)
+- `src/channel_flow_system.h` — added `configure_fieldsplit` declaration
+- `src/channel_flow_system.cpp` — implemented `configure_fieldsplit` (~60 lines)
+- `src/params.h` — removed `ILU_FILL` and `KSP_RTOL`; updated solver comment
+- `src/main.cpp` — replaced ILU options with fieldsplit options; added
+  `configure_fieldsplit` call; switched to `petsc_utils.h`
+- `tests/test_stokes.cpp` — same options update; updated iteration check to ≤ 100
+
+### Next steps (Phase 4)
+- ExodusII output (write velocity/pressure fields in `.e` format)
+- Drag and lift coefficient computation on the cylinder boundary
+- `test_output.cpp`

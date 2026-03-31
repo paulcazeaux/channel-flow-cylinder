@@ -22,22 +22,13 @@
 #include "libmesh/steady_solver.h"
 #include "libmesh/newton_solver.h"
 
+#include "petsc_utils.h"
+
 #include <petscsys.h>
 
 #include <iostream>
-#include <iomanip>
-#include <sstream>
 #include <string>
 #include <cstring>
-
-/// @brief Format a double for PetscOptionsSetValue using scientific notation.
-/// std::to_string uses %f (6 decimal places) and truncates values like 1e-10 to "0.000000".
-static std::string petsc_str(double v)
-{
-    std::ostringstream ss;
-    ss << std::scientific << std::setprecision(6) << v;
-    return ss.str();
-}
 
 /// @brief Parse --mesh and --help flags from argv; return mesh path or "".
 static std::string parse_args(int argc, char** argv)
@@ -106,22 +97,33 @@ int main(int argc, char** argv)
     libMesh::out << "  DOFs: " << sys.n_dofs() << "\n";
 
     // ── Phase 3: PETSc KSP/PC options ─────────────────────────────────────
-    // FGMRES (restart=100) with ILU(ILU_FILL) on the full saddle-point system.
-    // BoomerAMG on the full coupled block does NOT converge: the pressure rows
-    // have a zero diagonal, violating AMG coarsening assumptions regardless of
-    // null-space handling.  The principled scalable alternative is a fieldsplit
-    // preconditioner (AMG on the (1,1) velocity block + Schur complement
-    // approximation for pressure), but ILU(k) is robust for the problem sizes
-    // targeted here (Re ≤ 20, moderate mesh).
-    PetscOptionsSetValue(NULL, "-ksp_type",         "fgmres");
+    // Outer FGMRES + fieldsplit Schur preconditioner (Silvester & Wathen 1994).
+    // Velocity block → BoomerAMG; pressure block → Jacobi on the Schur approx.
+    // ISes are registered programmatically via configure_fieldsplit (below).
+    PetscOptionsSetValue(NULL, "-ksp_type",           "fgmres");
     PetscOptionsSetValue(NULL, "-ksp_gmres_restart",
                          std::to_string(Params::GMRES_RESTART).c_str());
-    PetscOptionsSetValue(NULL, "-ksp_rtol",         petsc_str(Params::KSP_RTOL).c_str());
+    // ksp_rtol is left to libMesh's inexact-Newton framework, which sets it
+    // adaptively each step.  Overriding with a tight tolerance (1e-10) forces
+    // the linear solver to run to the iteration limit.
     PetscOptionsSetValue(NULL, "-ksp_max_it",
                          std::to_string(Params::KSP_MAX_IT).c_str());
-    PetscOptionsSetValue(NULL, "-pc_type",          "ilu");
-    PetscOptionsSetValue(NULL, "-pc_factor_levels",
-                         std::to_string(Params::ILU_FILL).c_str());
+
+    // Fieldsplit type set programmatically in configure_fieldsplit (PCSetType,
+    // PCFieldSplitSetType, PCFieldSplitSetSchurFactType, PCFieldSplitSetSchurPre).
+    // Sub-PC options are still set here via options string and picked up at PCSetUp.
+
+    // Velocity sub-PC: single BoomerAMG V-cycle
+    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_ksp_type",       "preonly");
+    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_pc_type",        "hypre");
+    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_pc_hypre_type",  "boomeramg");
+
+    // Pressure sub-PC: Jacobi on Sp (the assembled Schur approximation, 706×706)
+    PetscOptionsSetValue(NULL, "-fieldsplit_pressure_ksp_type",   "preonly");
+    PetscOptionsSetValue(NULL, "-fieldsplit_pressure_pc_type",    "jacobi");
+
+    // Register velocity/pressure IS objects with PETSc fieldsplit.
+    ChannelFlowSystem::configure_fieldsplit(sys, mesh, ns);
 
     // ── Phase 3: Stokes initialisation → Navier-Stokes Newton ─────────────
     // A linear Stokes solve provides a good initial guess and avoids Newton

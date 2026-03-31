@@ -15,6 +15,7 @@
 
 #include "channel_flow_system.h"
 #include "params.h"
+#include "petsc_utils.h"
 
 #include "libmesh/libmesh.h"
 #include "libmesh/mesh.h"
@@ -33,19 +34,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
-#include <iomanip>
 #include <iostream>
-#include <sstream>
 #include <vector>
-
-/// @brief Format a double for PetscOptionsSetValue using scientific notation.
-/// std::to_string uses %f and silently truncates values like 1e-10 to "0.000000".
-static std::string petsc_str(double v)
-{
-    std::ostringstream ss;
-    ss << std::scientific << std::setprecision(6) << v;
-    return ss.str();
-}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -125,15 +115,27 @@ int main(int argc, char** argv)
     libMesh::out << "[test_stokes] DOFs: " << sys.n_dofs() << "\n";
 
     // ── 4. PETSc KSP/PC options — match production configuration ─────────────
-    PetscOptionsSetValue(NULL, "-ksp_type",         "fgmres");
+    PetscOptionsSetValue(NULL, "-ksp_type",           "fgmres");
     PetscOptionsSetValue(NULL, "-ksp_gmres_restart",
                          std::to_string(Params::GMRES_RESTART).c_str());
-    PetscOptionsSetValue(NULL, "-ksp_rtol",         petsc_str(Params::KSP_RTOL).c_str());
+    // ksp_rtol left to libMesh's inexact-Newton tolerance selection.
     PetscOptionsSetValue(NULL, "-ksp_max_it",
                          std::to_string(Params::KSP_MAX_IT).c_str());
-    PetscOptionsSetValue(NULL, "-pc_type",          "ilu");
-    PetscOptionsSetValue(NULL, "-pc_factor_levels",
-                         std::to_string(Params::ILU_FILL).c_str());
+
+    // Fieldsplit type set programmatically in configure_fieldsplit.
+    // Sub-PC options are still set here and picked up at PCSetUp.
+
+    // Velocity sub-PC: single BoomerAMG V-cycle
+    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_ksp_type",       "preonly");
+    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_pc_type",        "hypre");
+    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_pc_hypre_type",  "boomeramg");
+
+    // Pressure sub-PC: Jacobi on Sp (assembled Schur approximation)
+    PetscOptionsSetValue(NULL, "-fieldsplit_pressure_ksp_type",   "preonly");
+    PetscOptionsSetValue(NULL, "-fieldsplit_pressure_pc_type",    "jacobi");
+
+    // Register velocity/pressure IS objects with PETSc fieldsplit.
+    ChannelFlowSystem::configure_fieldsplit(sys, mesh, ns);
 
     // ── 5. Stokes solve ───────────────────────────────────────────────────────
     libMesh::out << "[test_stokes] Running Stokes linear solve...\n";
@@ -153,8 +155,10 @@ int main(int argc, char** argv)
     libMesh::out << "[test_stokes] Newton inner iterations = " << n_iters
                  << ", final residual norm = " << final_res << "\n";
 
-    if (n_iters == 0) {
-        std::cerr << "[test_stokes] FAIL: solver made zero iterations.\n";
+    // Fieldsplit AMG is mesh-independent; expect a small, nonzero iteration count.
+    if (n_iters == 0 || n_iters > 100) {
+        std::cerr << "[test_stokes] FAIL: unexpected Newton inner iterations = "
+                  << n_iters << " (expected 1–100).\n";
         return 1;
     }
 
