@@ -115,13 +115,13 @@ int main(int argc, char** argv)
     PetscOptionsSetValue(NULL, "-ksp_max_it",
                          std::to_string(Params::KSP_MAX_IT).c_str());
 
-    // ── Velocity sub-PC: BoomerAMG ──────────────────────────────────────
-    // Mass-dominated block (M/dt + νK + N(u)): strong threshold 0.1.
-    // Falgout coarsening, default smoother (hybrid symmetric GS).
-    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_ksp_type",      "preonly");
-    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_pc_type",       "hypre");
-    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_pc_hypre_type", "boomeramg");
-    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_pc_hypre_boomeramg_strong_threshold", "0.1");
+    // ── Velocity sub-PC: ILU(1) ─────────────────────────────────────────
+    // At Re=100 the advection Jacobian dominates M/dt even with dt=0.02,
+    // making the velocity block non-symmetric.  BoomerAMG fails (FGMRES
+    // hits 200 iterations).  ILU is robust for non-symmetric systems.
+    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_ksp_type",         "preonly");
+    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_pc_type",          "ilu");
+    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_pc_factor_levels", "1");
 
     // ── Pressure sub-PC: BoomerAMG ───────────────────────────────────────
     // Laplacian-like Schur complement Sp: strong threshold 0.7.
