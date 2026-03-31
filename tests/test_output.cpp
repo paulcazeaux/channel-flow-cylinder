@@ -26,6 +26,7 @@
 #include "libmesh/steady_solver.h"
 #include "libmesh/newton_solver.h"
 #include "libmesh/exodusII_io.h"
+#include "libmesh/dof_map.h"
 
 #include <petscsys.h>
 
@@ -74,6 +75,13 @@ int main(int argc, char** argv)
     ns.verbose = false; // suppress Newton output for cleaner test log
 
     es.init();
+
+    // Apply the full inlet profile (the ramp is zero at t=0).
+    sys.time = Params::T_RAMP;
+    sys.get_dof_map().create_dof_constraints(mesh, sys.time);
+    sys.get_dof_map().enforce_constraints_exactly(sys);
+    sys.update();
+
     libMesh::out << "[test_output] DOFs: " << sys.n_dofs() << "\n";
 
     // ── 4. PETSc KSP/PC options ───────────────────────────────────────────────

@@ -112,6 +112,13 @@ int main(int argc, char** argv)
     ns.verbose = true;
 
     es.init();
+
+    // Apply the full inlet profile (the ramp is zero at t=0).
+    sys.time = Params::T_RAMP;
+    sys.get_dof_map().create_dof_constraints(mesh, sys.time);
+    sys.get_dof_map().enforce_constraints_exactly(sys);
+    sys.update();
+
     libMesh::out << "[test_stokes] DOFs: " << sys.n_dofs() << "\n";
 
     // ── 4. PETSc KSP/PC options — match production configuration ─────────────
