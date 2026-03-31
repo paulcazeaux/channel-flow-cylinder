@@ -58,6 +58,12 @@ bool ChannelFlowSystem::element_time_derivative(bool request_jacobian,
 
     const double nu = Params::NU;
 
+    // Chain-rule factor for the time integrator: ∂u_θ/∂u = θ for EulerSolver.
+    // Jacobian entries must be multiplied by this so Newton gets the correct
+    // derivative of F(u_θ) w.r.t. the unknown u (not w.r.t. u_θ).
+    // For SteadySolver this is 1.0 — no effect.
+    const libMesh::Real sol_deriv = c.get_elem_solution_derivative();
+
     for (unsigned int qp = 0; qp < n_qp; ++qp) {
         const libMesh::Number       u      = c.interior_value(_u_var, qp);
         const libMesh::Number       v      = c.interior_value(_v_var, qp);
@@ -84,21 +90,21 @@ bool ChannelFlowSystem::element_time_derivative(bool request_jacobian,
                     const libMesh::RealGradient& dphi_j = dphi[j][qp];
 
                     // Viscous contributions (always present)
-                    (*Kuu)(i,j) += jxw * nu * (dphi_j * dphi_i);
-                    (*Kvv)(i,j) += jxw * nu * (dphi_j * dphi_i);
+                    (*Kuu)(i,j) += jxw * sol_deriv * nu * (dphi_j * dphi_i);
+                    (*Kvv)(i,j) += jxw * sol_deriv * nu * (dphi_j * dphi_i);
 
                     // Advection Jacobian (suppressed in Stokes mode)
                     if (!_stokes_mode) {
-                        (*Kuu)(i,j) += jxw * (phi_j * grad_u(0) + u * dphi_j(0) + v * dphi_j(1)) * phi_i;
-                        (*Kuv)(i,j) += jxw * phi_j * grad_u(1) * phi_i;
-                        (*Kvu)(i,j) += jxw * phi_j * grad_v(0) * phi_i;
-                        (*Kvv)(i,j) += jxw * (u * dphi_j(0) + phi_j * grad_v(1) + v * dphi_j(1)) * phi_i;
+                        (*Kuu)(i,j) += jxw * sol_deriv * (phi_j * grad_u(0) + u * dphi_j(0) + v * dphi_j(1)) * phi_i;
+                        (*Kuv)(i,j) += jxw * sol_deriv * phi_j * grad_u(1) * phi_i;
+                        (*Kvu)(i,j) += jxw * sol_deriv * phi_j * grad_v(0) * phi_i;
+                        (*Kvv)(i,j) += jxw * sol_deriv * (u * dphi_j(0) + phi_j * grad_v(1) + v * dphi_j(1)) * phi_i;
                     }
                 }
                 for (std::size_t j = 0; j < n_p_dofs; ++j) {
                     const libMesh::Real psi_j = psi[j][qp];
-                    (*Kup)(i,j) += jxw * (-psi_j * dphi_i(0));
-                    (*Kvp)(i,j) += jxw * (-psi_j * dphi_i(1));
+                    (*Kup)(i,j) += jxw * sol_deriv * (-psi_j * dphi_i(0));
+                    (*Kvp)(i,j) += jxw * sol_deriv * (-psi_j * dphi_i(1));
                 }
             }
         }
@@ -135,6 +141,8 @@ bool ChannelFlowSystem::element_constraint(bool request_jacobian,
         Kpv = &c.get_elem_jacobian(_p_var, _v_var);
     }
 
+    const libMesh::Real sol_deriv = c.get_elem_solution_derivative();
+
     for (unsigned int qp = 0; qp < n_qp; ++qp) {
         const libMesh::Gradient grad_u = c.interior_gradient(_u_var, qp);
         const libMesh::Gradient grad_v = c.interior_gradient(_v_var, qp);
@@ -148,8 +156,8 @@ bool ChannelFlowSystem::element_constraint(bool request_jacobian,
 
             if (request_jacobian) {
                 for (std::size_t j = 0; j < n_u_dofs; ++j) {
-                    (*Kpu)(i,j) -= jxw * dphi[j][qp](0) * psi_i;
-                    (*Kpv)(i,j) -= jxw * dphi[j][qp](1) * psi_i;
+                    (*Kpu)(i,j) -= jxw * sol_deriv * dphi[j][qp](0) * psi_i;
+                    (*Kpv)(i,j) -= jxw * sol_deriv * dphi[j][qp](1) * psi_i;
                 }
             }
         }
