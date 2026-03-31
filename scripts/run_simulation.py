@@ -9,16 +9,27 @@ job submission.  Designed to run on the Oscar HPC cluster at Brown.
 Usage:
     python scripts/run_simulation.py [OPTIONS]
 
+Mesh options:
     --mesh-file PATH     Path to an existing .msh mesh (skip generation)
     --lc-far FLOAT       Global mesh size [m]      (default: 0.05)
     --lc-cyl FLOAT       Cylinder mesh size [m]    (default: 0.01)
+
+Solver options:
+    --re FLOAT            Reynolds number           (default: 10)
+    --dt FLOAT            Time step [s]             (default: 0.025)
+    --t-final FLOAT       Final time [s]            (default: 8.0)
+    --output-interval INT Write snapshot every N steps (default: 10)
+
+SLURM options:
     --nodes INT           SLURM nodes               (default: 1)
     --ntasks INT          SLURM MPI tasks            (default: 1)
     --time STR            SLURM wall-clock limit     (default: 01:00:00)
     --partition STR       SLURM partition            (default: batch)
     --job-name STR        SLURM job name             (default: channel_flow)
-    --dry-run             Print actions without executing
+
+Control:
     --output-dir PATH     Directory for results      (default: results)
+    --dry-run             Print actions without executing
 """
 
 import argparse
@@ -59,6 +70,17 @@ def parse_args(argv=None):
                       help="Global element size [m]")
     mesh.add_argument("--lc-cyl", type=float, default=0.01,
                       help="Cylinder element size [m]")
+
+    # Solver options
+    solver = p.add_argument_group("solver")
+    solver.add_argument("--re", type=float, default=10.0,
+                        help="Reynolds number (adjusts U_MAX)")
+    solver.add_argument("--dt", type=float, default=0.025,
+                        help="Time step [s]")
+    solver.add_argument("--t-final", type=float, default=8.0,
+                        help="Final simulation time [s]")
+    solver.add_argument("--output-interval", type=int, default=10,
+                        help="Write ExodusII snapshot every N steps")
 
     # SLURM options
     slurm = p.add_argument_group("SLURM")
@@ -113,7 +135,7 @@ def generate_slurm_script(args, mesh_path):
     """Build a SLURM batch script as a string.
 
     Args:
-        args: Parsed arguments (SLURM options).
+        args: Parsed arguments (SLURM + solver options).
         mesh_path: Path to the mesh file.
 
     Returns:

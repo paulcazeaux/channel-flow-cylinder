@@ -963,3 +963,25 @@ Solver converges in 1 Newton step per time step during ramp-up.
 ### Next steps
 - Phase 7: update Python driver for time-dependent parameters
 - Run on fine mesh for better visualisation
+
+---
+
+## Session 14 (continued) — 2026-03-30
+
+### Topics
+- Phase 7: updated Python driver with solver options
+- README.md with problem description, parameter guide, and visualisation instructions
+
+### Changes
+- `scripts/run_simulation.py` — added `--re`, `--dt`, `--t-final`,
+  `--output-interval` arguments
+- `tests/test_driver.py` — added `test_solver_args` test (11 tests total)
+- `README.md` — new: problem description, parameter tuning guide (Re, cylinder
+  position, time stepping, mesh resolution), visualisation instructions
+  (ParaView local, client-server, Open OnDemand), project structure, solver
+  details, references
+- `PLAN.md` — all 7 phases marked Done
+
+### Status
+All time-dependent phases complete.  Solver produces ExodusII time series
+showing eddy development from rest at Re=10.

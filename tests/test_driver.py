@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
 test_driver.py
-Phase 6 tests: Python driver CLI parsing, SLURM generation, mesh invocation.
+Tests for Python driver CLI parsing, SLURM generation, mesh invocation.
 
-Pass criteria (from PLAN.md Phase 6):
+Pass criteria:
   1. CLI argument parsing works — all args parsed without error.
   2. SLURM script has correct structure — #SBATCH directives present.
   3. Mesh generation is invoked correctly — generate_mesh.py called with right args.
   4. Dry-run mode does not submit or execute — no side effects.
+  5. Solver options (--re, --dt, --t-final, --output-interval) are parsed.
 
 Run with:
     python -m pytest tests/test_driver.py -v
@@ -35,6 +36,10 @@ class TestCLIParsing(unittest.TestCase):
         self.assertIsNone(args.mesh_file)
         self.assertEqual(args.lc_far, 0.05)
         self.assertEqual(args.lc_cyl, 0.01)
+        self.assertEqual(args.re, 10.0)
+        self.assertEqual(args.dt, 0.025)
+        self.assertEqual(args.t_final, 8.0)
+        self.assertEqual(args.output_interval, 10)
         self.assertEqual(args.nodes, 1)
         self.assertEqual(args.ntasks, 1)
         self.assertEqual(args.time, "01:00:00")
@@ -48,6 +53,10 @@ class TestCLIParsing(unittest.TestCase):
         args = run_simulation.parse_args([
             "--lc-far", "0.1",
             "--lc-cyl", "0.03",
+            "--re", "20",
+            "--dt", "0.01",
+            "--t-final", "5.0",
+            "--output-interval", "5",
             "--nodes", "2",
             "--ntasks", "4",
             "--time", "02:00:00",
@@ -58,6 +67,10 @@ class TestCLIParsing(unittest.TestCase):
         ])
         self.assertEqual(args.lc_far, 0.1)
         self.assertEqual(args.lc_cyl, 0.03)
+        self.assertEqual(args.re, 20.0)
+        self.assertEqual(args.dt, 0.01)
+        self.assertEqual(args.t_final, 5.0)
+        self.assertEqual(args.output_interval, 5)
         self.assertEqual(args.nodes, 2)
         self.assertEqual(args.ntasks, 4)
         self.assertEqual(args.time, "02:00:00")
@@ -70,6 +83,19 @@ class TestCLIParsing(unittest.TestCase):
         """--mesh-file is parsed correctly."""
         args = run_simulation.parse_args(["--mesh-file", "/path/to/mesh.msh"])
         self.assertEqual(args.mesh_file, "/path/to/mesh.msh")
+
+    def test_solver_args(self):
+        """Solver-specific args are parsed correctly."""
+        args = run_simulation.parse_args([
+            "--re", "5",
+            "--dt", "0.05",
+            "--t-final", "12.0",
+            "--output-interval", "20",
+        ])
+        self.assertEqual(args.re, 5.0)
+        self.assertEqual(args.dt, 0.05)
+        self.assertEqual(args.t_final, 12.0)
+        self.assertEqual(args.output_interval, 20)
 
 
 class TestSLURMScript(unittest.TestCase):
@@ -134,13 +160,6 @@ class TestDryRun(unittest.TestCase):
 
     def test_dry_run_no_side_effects(self):
         """Dry-run completes without creating files or submitting jobs."""
-        args = run_simulation.parse_args([
-            "--mesh-file", "/tmp/fake.msh",
-            "--dry-run",
-            "--job-name", "dryrun_test",
-        ])
-        # main() in dry-run with --mesh-file should complete without error
-        # and not create any files
         _, mesh_path, script = run_simulation.main([
             "--mesh-file", "/tmp/fake.msh",
             "--dry-run",

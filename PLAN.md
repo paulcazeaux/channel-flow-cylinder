@@ -33,7 +33,7 @@ The `main` branch has a complete, validated **steady-state** solver:
 | 4 | Time-series ExodusII output (snapshots every N steps) | ✅ Done |
 | 5 | Per-step drag/lift output C_D(t), C_L(t) | ✅ Done |
 | 6 | Testing and validation | ✅ Done |
-| 7 | Python driver update (time-dependent parameters) | ⬜ Todo |
+| 7 | Python driver update (time-dependent parameters) | ✅ Done |
 
 ## Phase Details
 
