@@ -84,7 +84,10 @@ int main(int argc, char** argv)
     libMesh::EquationSystems es(mesh);
     ChannelFlowSystem& sys = es.add_system<ChannelFlowSystem>("ChannelFlow");
 
-    // Time solver: backward Euler (theta=1.0) for unconditional stability.
+    // Time solver: EulerSolver with theta=0.5 (Crank-Nicolson).
+    // Second-order accurate, A-stable.  Evaluates F at the blended state
+    // theta*u_new + (1-theta)*u_old, so Newton sees the full Jacobian
+    // and converges quadratically (unlike Euler2Solver which gives linear).
     sys.time_solver = std::make_unique<libMesh::EulerSolver>(sys);
     auto& euler = static_cast<libMesh::EulerSolver&>(*sys.time_solver);
     euler.theta = Params::THETA;
@@ -112,16 +115,20 @@ int main(int argc, char** argv)
     PetscOptionsSetValue(NULL, "-ksp_max_it",
                          std::to_string(Params::KSP_MAX_IT).c_str());
 
-    // Velocity sub-PC: BoomerAMG.  M/dt regularises the velocity block,
-    // making it diagonally dominant and nearly SPD — ideal for AMG.
-    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_ksp_type",         "preonly");
-    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_pc_type",          "hypre");
-    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_pc_hypre_type",    "boomeramg");
+    // ── Velocity sub-PC: BoomerAMG ──────────────────────────────────────
+    // Mass-dominated block (M/dt + νK + N(u)): strong threshold 0.1.
+    // Falgout coarsening, default smoother (hybrid symmetric GS).
+    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_ksp_type",      "preonly");
+    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_pc_type",       "hypre");
+    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_pc_hypre_type", "boomeramg");
+    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_pc_hypre_boomeramg_strong_threshold", "0.1");
 
-    // Pressure sub-PC: BoomerAMG on assembled Sp (SPD).
-    PetscOptionsSetValue(NULL, "-fieldsplit_pressure_ksp_type",         "preonly");
-    PetscOptionsSetValue(NULL, "-fieldsplit_pressure_pc_type",          "hypre");
-    PetscOptionsSetValue(NULL, "-fieldsplit_pressure_pc_hypre_type",    "boomeramg");
+    // ── Pressure sub-PC: BoomerAMG ───────────────────────────────────────
+    // Laplacian-like Schur complement Sp: strong threshold 0.7.
+    PetscOptionsSetValue(NULL, "-fieldsplit_pressure_ksp_type",      "preonly");
+    PetscOptionsSetValue(NULL, "-fieldsplit_pressure_pc_type",       "hypre");
+    PetscOptionsSetValue(NULL, "-fieldsplit_pressure_pc_hypre_type", "boomeramg");
+    PetscOptionsSetValue(NULL, "-fieldsplit_pressure_pc_hypre_boomeramg_strong_threshold", "0.7");
 
     ChannelFlowSystem::configure_fieldsplit(sys, mesh, ns);
 

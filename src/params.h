@@ -53,9 +53,11 @@ constexpr double SNES_ATOL   = 1.0e-8; ///< Absolute nonlinear residual toleranc
 constexpr double SNES_RTOL   = 1.0e-10;///< Relative nonlinear residual tolerance
 
 // ── Linear solver: FGMRES + fieldsplit Schur (per Newton step) ───────────────
-// Velocity block → BoomerAMG: M/dt regularises the operator, making it
-//   diagonally dominant and nearly SPD — ideal for AMG.
-// Pressure block → BoomerAMG on assembled Sp (SPD): ideal AMG target.
+// Velocity block → BoomerAMG, strong threshold 0.1 (mass-dominated block).
+// Pressure block → BoomerAMG, strong threshold 0.7 (Laplacian-like Sp).
+// Strong thresholds follow Guermond's guidelines; default hybrid symmetric
+//   Gauss-Seidel smoother (Chebyshev was tested but degraded convergence
+//   on the non-symmetric velocity block).
 // Lower-triangular Schur factorisation; selfp Schur approximation.
 // Linear tolerance set adaptively by libMesh's inexact-Newton framework.
 constexpr int    KSP_MAX_IT    = 200;    ///< Maximum Krylov iterations per Newton step
@@ -66,11 +68,11 @@ constexpr int    GMRES_RESTART = 100;    ///< FGMRES restart parameter
 constexpr double DRAG_LIFT_NORM = 2.0 / (RHO * U_MEAN * U_MEAN * CYL_DIAMETER);
 
 // ── Time-dependent solver ─────────────────────────────────────────────────────
-constexpr double DT             = 0.005;  ///< Time step [s]
+constexpr double DT             = 0.02;   ///< Time step [s]
 constexpr double T_FINAL        = 8.0;    ///< Final simulation time [s]
 constexpr double T_RAMP         = 1.0;    ///< Inlet velocity ramp-up time [s]
-constexpr int    OUTPUT_INTERVAL = 20;    ///< Write ExodusII snapshot every N steps
-constexpr double THETA          = 1.0;    ///< 1.0 = backward Euler, 0.5 = Crank-Nicolson
+constexpr int    OUTPUT_INTERVAL = 5;     ///< Write ExodusII snapshot every N steps
+constexpr double THETA          = 0.5;    ///< 0.5 = Crank-Nicolson (2nd order, A-stable)
 
 // ── Output ────────────────────────────────────────────────────────────────────
 constexpr const char* OUTPUT_FILE = "results/channel_flow.e"; ///< ExodusII output path
