@@ -13,7 +13,7 @@
 | 1 | Gmsh mesh generation | ✅ Done |
 | 2 | C++ solver — libMesh FEMSystem (Taylor-Hood P2/P1) | ✅ Done |
 | 3 | Solver configuration — PETSc SNES + FGMRES + BoomerAMG | ✅ Done |
-| 4 | Output — ExodusII + drag/lift post-processing | ⬜ Todo |
+| 4 | Output — ExodusII + drag/lift post-processing | ✅ Done |
 | 5 | CMake build system | ✅ Done |
 | 6 | Python driver | ⬜ Todo |
 | 7 | Validation against benchmark | ⬜ Todo |
