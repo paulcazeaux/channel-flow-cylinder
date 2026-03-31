@@ -1,146 +1,188 @@
-# Implementation Plan — 2D Channel Flow Past a Cylinder
+# Implementation Plan — Time-Dependent Channel Flow Past a Cylinder
 
-## Architecture
-- **Solver**: C++ with libMesh (FEM) + PETSc (linear algebra/nonlinear solver)
-- **Driver**: Python (`scripts/run_simulation.py`) — mesh generation, job submission, post-processing
-- **Benchmark**: Schafer & Turek (1996) DFG 2D-1
+## Goal
+Visualise recirculation eddies developing from rest in 2D channel flow past a
+cylinder at Re = 5–10.  Produce an ExodusII time series for ParaView animation.
+
+## Starting Point
+The `main` branch has a complete, validated **steady-state** solver:
+- Taylor-Hood P2/P1 FEMSystem with Dirichlet BCs
+- Newton + FGMRES + fieldsplit Schur preconditioner (ILU velocity, AMG pressure)
+- ExodusII output and drag/lift post-processing
+- Validated at Re = 20 against Schafer-Turek DFG 2D-1: C_D = 5.571
+
+## Key Changes from Steady to Time-Dependent
+
+| Aspect | Steady (main branch) | Time-dependent (this branch) |
+|--------|---------------------|------------------------------|
+| Time solver | `SteadySolver` | `EulerSolver` or `Euler2Solver` (BDF2) |
+| Mass matrix | Not assembled | `mass_residual()` override needed |
+| Weak form | ν∫∇u·∇w + (u·∇)u·w − p∇·w = 0 | M ∂u/∂t + ν∫∇u·∇w + (u·∇)u·w − p∇·w = 0 |
+| Velocity preconditioner | ILU(1) (Oseen is non-symmetric) | BoomerAMG (M/dt regularises → diag-dominant) |
+| Initial condition | Stokes solve | Zero velocity (start from rest) |
+| Output | Single ExodusII file | Time series: snapshots every N steps |
+| Drag/lift | Single value | Time history C_D(t), C_L(t) printed per step |
 
 ## Phases
 
 | # | Phase | Status |
 |---|-------|--------|
-| 0 | Project scaffolding (dirs, PLAN.md, notes, .gitignore) | ✅ Done |
-| 1 | Gmsh mesh generation | ✅ Done |
-| 2 | C++ solver — libMesh FEMSystem (Taylor-Hood P2/P1) | ✅ Done |
-| 3 | Solver configuration — PETSc SNES + FGMRES + BoomerAMG | ✅ Done |
-| 4 | Output — ExodusII + drag/lift post-processing | ✅ Done |
-| 5 | CMake build system | ✅ Done |
-| 6 | Python driver | ✅ Done |
-| 7 | Validation against benchmark | ✅ Done |
+| 1 | Mass matrix assembly (`element_mass_residual`) | ⬜ Todo |
+| 2 | Time-stepping in `main.cpp` (BDF2 loop, dt, T_final) | ⬜ Todo |
+| 3 | Preconditioner update (AMG for velocity block) | ⬜ Todo |
+| 4 | Time-series ExodusII output (snapshots every N steps) | ⬜ Todo |
+| 5 | Per-step drag/lift output C_D(t), C_L(t) | ⬜ Todo |
+| 6 | Testing and validation | ⬜ Todo |
+| 7 | Python driver update (time-dependent parameters) | ⬜ Todo |
 
-## Key Decisions
+## Phase Details
 
-| Decision | Choice | Justification |
-|----------|--------|---------------|
-| FEM framework | libMesh | Pure C++ solver; PETSc + Trilinos backends available |
-| Elements | Taylor-Hood P2/P1 | Inf-sup stable (Brezzi 1974); standard for Navier-Stokes |
-| Weak form | Standard Galerkin | No stabilization needed at Re ≈ 5 |
-| Advection form | Skew-symmetric | Energy stable |
-| Nonlinear solver | PETSc SNES Newton w/ backtracking line search | Quadratic convergence near solution |
-| Linear solver | FGMRES (restart=100) | Flexible Krylov for nonsymmetric saddle-point system |
-| Preconditioner | BoomerAMG (Hypre) | Optimal complexity for elliptic-dominated systems at low Re |
-| Initialization | Stokes → Navier-Stokes | Avoids Newton divergence from zero initial guess |
-| Output format | ExodusII (.e) | Native to libMesh; ParaView-compatible |
-| Mesh | Gmsh unstructured triangles | h=0.05 global, h=0.01 near cylinder |
+### Phase 1 — Mass matrix assembly
 
-## Domain Parameters (Schafer-Turek 2D-1)
+Add `element_mass_residual()` override to `ChannelFlowSystem`.  libMesh's
+`UnsteadySolver` calls this to evaluate M · ∂u/∂t.
 
+The mass residual for incompressible NS is:
 ```
-Channel:  [0, 2.2] × [0, 0.41]   (meters)
-Cylinder: center (0.2, 0.2), radius 0.05
-U_max:    0.3 m/s  (mean inlet velocity U_mean = 0.2 m/s)
-nu:       1e-3 m²/s  (kinematic viscosity, water-like)
-Re:       U_mean * D / nu = 0.2 * 0.1 / 1e-3 = 20  (Schafer-Turek)
-          For Re=5: U_mean = 0.05 m/s, U_max = 0.075 m/s
+∫ ρ (∂u/∂t) · w  dx     (momentum equations only; no time derivative in continuity)
 ```
 
-## Test Plan
+Implementation: override `bool mass_residual(bool request_jacobian, DiffContext&)`.
+Only velocity variables (u, v) contribute; pressure has no mass term.
 
-All tests must run on a workstation without cluster access (use a coarse mesh).
-C++ tests are registered with CTest; Python tests use `unittest`.
-Run the full suite with `ctest --output-on-failure` from the build directory,
-and `python -m pytest tests/` for Python tests.
+**Files**: `channel_flow_system.h`, `channel_flow_assembly.cpp`
 
-### Phase 1 — Mesh (`tests/test_mesh.py`)
-| Check | Pass criterion |
-|-------|---------------|
-| `generate_mesh.py` runs without error | exit code 0 |
-| Output `.msh` file exists | file present |
-| Node count in expected range | 3 000 – 25 000 nodes |
-| Triangle count in expected range | 5 000 – 50 000 elements |
-| All 4 physical boundary tags present | tags 1–4 found in mesh |
-| No degenerate elements (quality check via Gmsh API) | min quality > 0.1 |
+### Phase 2 — Time-stepping loop
 
-### Phase 2 — FEM system initialisation (`tests/test_spaces.cpp`)
-| Check | Pass criterion |
-|-------|---------------|
-| libMesh initialises without error | no exception |
-| Mesh loads from `.msh` file | `mesh.n_elem() > 0` |
-| P2 velocity space has more DOFs than P1 pressure space | `n_u_dofs > n_p_dofs` |
-| Inlet Dirichlet DOFs are marked | at least 1 constrained DOF on boundary 1 |
-| No-slip DOFs on cylinder are marked | at least 1 constrained DOF on boundary 4 |
+Replace `SteadySolver` with libMesh's `Euler2Solver` (Crank-Nicolson/BDF2) or
+`EulerSolver` (backward Euler) in `main.cpp`.
 
-### Phase 3 — Stokes initialisation solve (`tests/test_stokes.cpp`)
-| Check | Pass criterion |
-|-------|---------------|
-| Stokes linear solve converges | KSP converged reason > 0 |
-| KSP iteration count | < 300 |
-| Linear residual after solve | < 1e-8 |
-| Velocity is zero at no-slip boundaries | max |u| on walls/cylinder < 1e-10 |
-| Pressure has zero mean (or pinned reference) | solver does not diverge |
+Key parameters (add to `params.h`):
+```
+DT        = 0.025      // time step [s]
+T_FINAL   = 8.0        // final time [s] (several convective times L/U ≈ 22s at Re=5)
+THETA     = 1.0        // implicit Euler (θ=1) or Crank-Nicolson (θ=0.5)
+```
 
-### Phase 4 — Output and drag/lift (`tests/test_output.cpp`)
-| Check | Pass criterion |
-|-------|---------------|
-| ExodusII file is written | file `results/test.e` exists |
-| File can be re-read by libMesh ExodusII reader | no exception on read-back |
-| Drag force on cylinder is finite and non-NaN | `std::isfinite(F_D)` |
-| Lift force is near zero for symmetric Stokes flow | `|C_L| < 1e-6` |
+At Re = 5–10 the flow reaches steady state after ~3–5 convective times.
+Convective time scale: L/U_mean ≈ 2.2/0.1 = 22 s at Re = 5.  T_final = 8 s
+is sufficient to see eddies fully developed.
 
-### Phase 5 — CMake build (`CTest` infrastructure)
-| Check | Pass criterion |
-|-------|---------------|
-| `cmake` configure succeeds | exit code 0 |
-| `cmake --build` compiles all targets | exit code 0, binary present |
-| All CTest tests discovered | `ctest -N` lists ≥ 3 tests |
-| Solver binary runs with `--help` | exit code 0 or 1, no crash |
+The time loop: `for (t = 0; t < T_FINAL; t += DT) { sys.solve(); advance(); }`.
+libMesh's `UnsteadySolver` manages old solution vectors automatically.
 
-### Phase 6 — Python driver (`tests/test_driver.py`)
-| Check | Pass criterion |
-|-------|---------------|
-| CLI argument parsing works | all args parsed without error |
-| SLURM script is generated with correct structure | `#SBATCH` directives present |
-| Mesh generation is invoked correctly | `generate_mesh.py` called with right args |
-| Dry-run mode does not submit or execute | no side effects |
+Update `params.h` with U_MAX for Re = 5–10.
 
-### Phase 7 — Validation (`tests/test_validation.py`)
-| Check | Pass criterion |
-|-------|---------------|
-| Re = 20 steady solve converges | Newton converged, ≤ 20 iterations |
-| Drag coefficient (Re = 20) | C_D ∈ [5.57, 5.59] (Schafer-Turek interval) |
-| Lift coefficient (Re = 20) | \|C_L\| < 0.02 |
-| Lift coefficient (Re = 5) | \|C_L\| < 1e-4 (symmetric flow) |
-| ExodusII output is written | file present and non-empty |
+**Files**: `main.cpp`, `params.h`
 
-## File Map
+### Phase 3 — Preconditioner update
+
+With the mass matrix M/dt in the velocity block, the operator becomes:
+```
+A = M/dt + νK + N(u)
+```
+At small dt and moderate Re, M/dt dominates → the block is diagonally dominant
+and nearly SPD.  BoomerAMG now works well for the velocity sub-block.
+
+Change velocity sub-PC options:
+```
+-fieldsplit_velocity_pc_type  hypre
+-fieldsplit_velocity_pc_hypre_type  boomeramg
+```
+
+Keep pressure sub-PC as BoomerAMG on assembled Sp (unchanged).
+
+**Files**: `main.cpp`, `tests/test_stokes.cpp` (if updated)
+
+### Phase 4 — Time-series ExodusII output
+
+Write snapshots at regular intervals using `ExodusII_IO::write_timestep()`:
+```cpp
+ExodusII_IO exo(mesh);
+exo.write_timestep(filename, es, timestep_number, time);
+```
+
+All time steps are appended to a single `.e` file, which ParaView can load
+as an animation.
+
+Add parameter: `OUTPUT_INTERVAL = 10` (write every 10 time steps).
+
+**Files**: `main.cpp`, `params.h`
+
+### Phase 5 — Per-step drag/lift
+
+Call `compute_drag_lift()` at each output step and print C_D(t), C_L(t).
+Existing `drag_lift.cpp` works unchanged — it reads from `current_local_solution`.
+
+Optionally write a `drag_lift.csv` file for plotting.
+
+**Files**: `main.cpp`
+
+### Phase 6 — Testing and validation
+
+- **test_timestep.cpp**: Run 5 time steps on coarse mesh, verify:
+  - Newton converges at each step (≤ 10 iterations)
+  - Solution changes between steps (transient is non-trivial)
+  - C_D(t) is finite at final step
+  - ExodusII output file has multiple time steps
+
+- Update existing tests as needed (test_stokes may need adjustment for
+  mass_residual changes).
+
+**Files**: `tests/test_timestep.cpp`, `tests/CMakeLists.txt`
+
+### Phase 7 — Python driver update
+
+Update `scripts/run_simulation.py` to accept time-dependent parameters:
+`--dt`, `--t-final`, `--output-interval`, `--re` (adjusts U_MAX).
+
+**Files**: `scripts/run_simulation.py`, `tests/test_driver.py`
+
+## Parameters (params.h additions)
+
+```cpp
+// Time-dependent solver
+constexpr double DT           = 0.025;  // time step [s]
+constexpr double T_FINAL      = 8.0;    // final simulation time [s]
+constexpr int    OUTPUT_INTERVAL = 10;  // write ExodusII every N steps
+constexpr double THETA        = 1.0;    // 1.0 = backward Euler, 0.5 = Crank-Nicolson
+
+// Re = 5–10: adjust U_MAX
+// Re = U_MEAN * D / NU = (2/3 U_MAX) * 0.1 / 0.001
+// Re = 5:  U_MAX = 0.075 m/s
+// Re = 10: U_MAX = 0.15  m/s
+```
+
+## Physical Expectations
+
+At Re = 5–10:
+- Flow starts from rest (u = v = 0 everywhere, with inlet BC applied)
+- Boundary layer develops on cylinder, flow separates
+- Symmetric recirculation eddies form in the wake
+- Eddies grow and reach steady-state length
+- Eddy length ≈ 0.1–0.3 D at Re = 5, ≈ 0.5–1.0 D at Re = 10
+- C_D decreases from high initial value to steady state
+- C_L ≈ 0 (symmetric flow, no vortex shedding below Re ≈ 47)
+
+## File Map (changes from main branch highlighted)
 
 ```
-.
-├── CLAUDE.md                        # Project guidelines
-├── PLAN.md                          # This file — living tracker
-├── .gitignore
-├── meshes/
-│   ├── channel.geo                  # Gmsh geometry (parametric)
-│   └── generate_mesh.py             # Mesh generation script
-├── notes/
-│   ├── solver_parameters.md         # Literature references for numerical choices
-│   ├── benchmark_targets.md         # Expected C_D, C_L values
-│   └── conversation_log.md          # Session-by-session decision record
-├── src/
-│   ├── CMakeLists.txt               # Build system (includes tests/)
-│   ├── params.h                     # Centralized numerical parameters
-│   ├── channel_flow_system.h        # FEMSystem subclass declaration
-│   ├── channel_flow_system.cpp      # Weak form assembly + BCs
-│   └── main.cpp                     # Entry point
-├── tests/
-│   ├── CMakeLists.txt               # CTest registration for C++ tests
-│   ├── test_mesh.py                 # Phase 1: mesh validity checks
-│   ├── test_spaces.cpp              # Phase 2: DOF space initialisation
-│   ├── test_stokes.cpp              # Phase 3: Stokes linear solve
-│   ├── test_output.cpp              # Phase 4: ExodusII I/O + drag/lift
-│   ├── test_driver.py               # Phase 6: Python driver logic
-│   └── test_validation.py           # Phase 7: benchmark C_D, C_L
-├── scripts/
-│   └── run_simulation.py            # Python driver
-└── results/                         # (git-ignored) simulation output
+src/
+├── params.h                     # + DT, T_FINAL, OUTPUT_INTERVAL, THETA, Re adjust
+├── channel_flow_system.h        # + mass_residual declaration
+├── channel_flow_assembly.cpp    # + mass_residual implementation
+├── main.cpp                     # rewritten: time loop replaces steady solve
+├── drag_lift.h / drag_lift.cpp  # unchanged
+├── petsc_utils.h                # unchanged
+└── CMakeLists.txt               # unchanged
+
+tests/
+├── test_timestep.cpp            # new: Phase 6 time-stepping test
+├── test_spaces.cpp              # unchanged
+├── test_stokes.cpp              # may need minor update
+├── test_output.cpp              # may need minor update
+└── CMakeLists.txt               # + test_timestep
+
+scripts/
+└── run_simulation.py            # + time-dependent CLI args
 ```

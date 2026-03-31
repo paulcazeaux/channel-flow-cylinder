@@ -1,10 +1,14 @@
 # Project Guidelines: 2D Channel Flow Past a Cylinder
 
 ## Problem Description
-Simulate 2D incompressible viscous flow in a channel past a circular cylinder.
-- Reynolds number: Re ≈ 5 (laminar, steady-state eddy regime)
-- Expected physics: symmetric recirculation eddies behind the cylinder
-- Reference: Schafer & Turek (1996) DFG benchmark "Flow around a cylinder" (2D-1 case)
+Simulate **time-dependent** 2D incompressible viscous flow in a channel past a
+circular cylinder, starting from rest and evolving until steady-state eddies form.
+- Reynolds number: Re = 5–10 (laminar, steady-state eddy regime)
+- Expected physics: symmetric recirculation eddies develop behind the cylinder
+  during the transient, reaching a steady state
+- Goal: visualise the eddy development over time (time series of ExodusII snapshots)
+- Reference: Schafer & Turek (1996) DFG benchmark "Flow around a cylinder" (2D-2 case
+  for time-dependent, 2D-1 for steady-state validation)
 
 ## Boundary Conditions
 - Inlet (left): parabolic velocity profile, u = U_max * 4y(H-y)/H², v = 0
@@ -13,11 +17,15 @@ Simulate 2D incompressible viscous flow in a channel past a circular cylinder.
 - Cylinder surface: no-slip (u = v = 0)
 
 ## Discretization & Solver Parameters (from literature)
-- Spatial: Taylor-Hood P2/P1 finite elements (or Q2/Q1) — inf-sup stable
+- Spatial: Taylor-Hood P2/P1 finite elements — inf-sup stable
+- Temporal: BDF2 (second-order backward differentiation) via libMesh's time-stepping
 - Mesh: unstructured, finer near cylinder; h ~ 0.02–0.05 near cylinder
-- Nonlinear solver: Picard iteration or Newton (Newton preferred for Re > 1)
-- Linear solver: GMRES with ILU or AMG preconditioner
-- Convergence: residual tolerance 1e-6 (nonlinear), 1e-8 (linear)
+- Nonlinear solver: Newton (one or few iterations per time step for implicit BDF2)
+- Linear solver: FGMRES + fieldsplit block Schur complement preconditioner
+  - Velocity block: BoomerAMG (M/dt term regularises the operator at each time step)
+  - Pressure Schur complement: BoomerAMG on assembled Sp (SPD)
+- Time step: dt ≈ 0.01–0.05 s; simulate to T_final ≈ 5–10 s (several convective times)
+- Output: ExodusII snapshots every N time steps for ParaView animation
 
 ## Libraries & HPC Environment
 - **libMesh** for FEM discretization (pure C++, supports PETSc and Trilinos backends)
@@ -57,7 +65,8 @@ Simulate 2D incompressible viscous flow in a channel past a circular cylinder.
 
 ## Output
 - Velocity and pressure fields in ExodusII format (`.e`, ParaView-compatible)
-- Console: per-Newton-iteration residual norm, total iterations, drag/lift coefficients C_D, C_L
+- Time series: snapshots at regular intervals for animation of eddy development
+- Console: per-time-step residual norm, Newton iterations, drag/lift coefficients C_D(t), C_L(t)
 
 ## Session Logging
 - **At the end of every session, append an entry to `notes/conversation_log.md`** before committing.
