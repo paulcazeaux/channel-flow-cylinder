@@ -832,3 +832,54 @@ The refined mesh (lc_far=0.02, lc_cyl=0.003) hits the benchmark interval.
 ### Status
 All 7 phases complete. The solver is validated against the Schafer-Turek
 DFG 2D-1 benchmark at Re=20.
+
+---
+
+## Session 13 — 2026-03-30
+
+### Topics
+- Committed Phase 4 (Session 11 leftovers) and Phase 6 (Python driver)
+- Phase 7: Schafer-Turek benchmark validation — mesh convergence study
+- Planned time-dependent NS extension on new branch
+
+### Mesh convergence study (Phase 7)
+Ran the steady NS solver on progressively refined meshes to find the resolution
+needed to match the Schafer-Turek C_D ∈ [5.57, 5.59] interval:
+
+| Mesh | lc_far/lc_cyl | Elems | DOFs | C_D | C_L |
+|------|---------------|-------|------|-----|-----|
+| Coarse | 0.1/0.03 | 244 | 1251 | 5.524 | 0.0106 |
+| Medium | 0.05/0.01 | 1276 | 6087 | 5.524 | 0.0103 |
+| Fine | 0.03/0.005 | 3496 | 16332 | 5.561 | 0.0092 |
+| Refined | 0.02/0.003 | 7990 | 36880 | 5.571 | 0.0104 |
+
+The refined mesh (lc_far=0.02, lc_cyl=0.003) is the coarsest that hits the
+benchmark interval.  All 4 validation tests pass in ~12s.
+
+### Decisions
+- **New branch `time-dependent-ns`**: created from `main` after all 7 steady
+  phases were complete and committed.
+- **Time-dependent goal**: visualise recirculation eddies developing from rest
+  at Re=5–10.  This was the user's original motivation for the project.
+- **Time integrator**: BDF2 (or backward Euler) via libMesh `Euler2Solver`.
+  BDF2 is second-order accurate and A-stable.
+- **Preconditioner change for time-dependent**: the M/dt mass matrix term
+  regularises the velocity block, making it diagonally dominant and nearly SPD.
+  BoomerAMG becomes viable for the velocity sub-block (unlike steady where
+  ILU was needed due to the non-symmetric Oseen operator at cell-Pe~30).
+- **Initial condition**: start from rest (u=v=0) rather than Stokes
+  initialisation, so the transient eddy development is visible.
+- **Time parameters**: dt=0.025s, T_final=8s, output every 10 steps.
+  Convective time L/U_mean ≈ 22s at Re=5; 8s is sufficient to see eddies form.
+
+### Files created/modified
+- `CLAUDE.md` — updated problem description for time-dependent NS
+- `PLAN.md` — rewritten with 7 new phases for time-dependent extension
+- `scripts/run_simulation.py` — new (Phase 6, committed earlier this session)
+- `tests/test_driver.py` — new (Phase 6)
+- `tests/test_validation.py` — new (Phase 7)
+
+### Next steps
+- Phase 1: implement `mass_residual()` in `ChannelFlowSystem`
+- Phase 2: time-stepping loop in `main.cpp`
+- Phase 3: switch velocity sub-PC to BoomerAMG
