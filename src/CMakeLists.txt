@@ -9,6 +9,7 @@
 set(SOLVER_SOURCES
     channel_flow_system.cpp    # variable setup, Dirichlet BCs, mesh utilities
     channel_flow_assembly.cpp  # weak-form element assembly (momentum + continuity)
+    drag_lift.cpp              # Phase 4: stress-traction boundary integration
 )
 
 # ── channel_flow_lib: reusable solver components ─────────────────────────────

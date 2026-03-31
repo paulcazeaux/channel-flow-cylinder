@@ -44,4 +44,4 @@ add_solver_test(test_spaces test_spaces.cpp)
 add_solver_test(test_stokes test_stokes.cpp)
 
 # ── Phase 4: ExodusII output + drag/lift ─────────────────────────────────────
-# add_solver_test(test_output test_output.cpp)   # uncomment after Phase 4
+add_solver_test(test_output test_output.cpp)

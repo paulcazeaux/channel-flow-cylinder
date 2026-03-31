@@ -14,6 +14,7 @@
  */
 
 #include "channel_flow_system.h"
+#include "drag_lift.h"
 #include "params.h"
 
 #include "libmesh/libmesh.h"
@@ -21,11 +22,13 @@
 #include "libmesh/equation_systems.h"
 #include "libmesh/steady_solver.h"
 #include "libmesh/newton_solver.h"
+#include "libmesh/exodusII_io.h"
 
 #include "petsc_utils.h"
 
 #include <petscsys.h>
 
+#include <sys/stat.h>
 #include <iostream>
 #include <string>
 #include <cstring>
@@ -141,7 +144,20 @@ int main(int argc, char** argv)
     sys.set_stokes_mode(false);
     sys.solve();
 
-    // Phase 4 will write ExodusII output and compute drag/lift coefficients.
+    // ── Phase 4: ExodusII output ───────────────────────────────────────────────
+    (void)mkdir("results", 0755); // silently succeeds if directory already exists
+    libMesh::ExodusII_IO exo(mesh);
+    exo.write_equation_systems(Params::OUTPUT_FILE, es);
+    libMesh::out << "  Output written to " << Params::OUTPUT_FILE << "\n";
+
+    // ── Phase 4: Drag and lift coefficients ───────────────────────────────────
+    const auto drag_lift = compute_drag_lift(sys, mesh);
+    const double F_D = drag_lift.first;
+    const double F_L = drag_lift.second;
+    const double C_D = Params::DRAG_LIFT_NORM * F_D;
+    const double C_L = Params::DRAG_LIFT_NORM * F_L;
+    libMesh::out << "  C_D = " << C_D << "  C_L = " << C_L << "\n";
+
     libMesh::out << "Solve complete.\n";
     return 0;
 }

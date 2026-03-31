@@ -710,3 +710,53 @@ step).
 - ExodusII output (write `.e` file)
 - Drag and lift coefficient computation on cylinder boundary (BID 4)
 - `test_output.cpp`
+
+---
+
+## 2026-03-30 — Session 11: Phase 4 — ExodusII Output + Drag/Lift
+
+**Topics:** ExodusII output via libMesh; stress-tensor boundary integration for
+drag and lift; sign convention fix; normal convention clarification.
+
+### Implementation
+
+New file `src/drag_lift.cpp` integrates the Cauchy stress traction over the
+cylinder boundary (BID_CYLINDER):
+
+```
+F = ∫_Γ σ · n_body dS,   σ = -pI + ν(∇u + ∇uᵀ)
+```
+
+Iterates over active local elements, detects cylinder-boundary sides via
+`has_boundary_id`, calls `fe->reinit(elem, side)` for side FE quadrature,
+and manually interpolates u, v, p from the DOF values using phi/dphi.
+
+**Sign convention fix**: libMesh `get_normals()` returns the outward normal of
+the fluid element (pointing fluid→cylinder).  Schafer-Turek defines forces
+with the outward body normal (cylinder→fluid).  Fix: negate the accumulated
+integrals before returning from `compute_drag_lift`.
+
+**ExodusII output**: `libMesh::ExodusII_IO::write_equation_systems` writes the
+full velocity/pressure fields in a format readable by ParaView.
+
+### Results on coarse mesh
+
+| Quantity | Value | Schafer-Turek (Re=20) |
+|----------|-------|-----------------------|
+| C_D (NS)  | 5.52 | 5.57–5.59 |
+| C_L (NS)  | 0.011 | 0.010–0.011 |
+
+Good agreement with the benchmark on the coarse mesh (~1% error on C_D).
+
+### Files created/modified
+- `src/drag_lift.h` — new: declaration of `compute_drag_lift`
+- `src/drag_lift.cpp` — new: boundary stress integration (~115 lines)
+- `src/main.cpp` — added ExodusII write + drag/lift printout
+- `src/CMakeLists.txt` — added `drag_lift.cpp` to `SOLVER_SOURCES`
+- `tests/test_output.cpp` — new: Phase 4 test (file write/read + drag/lift checks)
+- `tests/CMakeLists.txt` — enabled `test_output`
+
+### Next steps (Phase 6)
+- Python driver (`scripts/run_simulation.py`): CLI arg parsing, SLURM job script
+  generation, mesh generation invocation, dry-run mode
+- `tests/test_driver.py`
