@@ -760,3 +760,35 @@ Good agreement with the benchmark on the coarse mesh (~1% error on C_D).
 - Python driver (`scripts/run_simulation.py`): CLI arg parsing, SLURM job script
   generation, mesh generation invocation, dry-run mode
 - `tests/test_driver.py`
+
+---
+
+## Session 12 — 2026-03-30
+
+### Topics
+- Committed Phase 4 work (Session 11 changes)
+- Implemented Phase 6: Python driver
+
+### Decisions
+- **Driver design**: `scripts/run_simulation.py` with three main functions:
+  `parse_args()`, `generate_mesh()`, `generate_slurm_script()`.
+  `main()` returns `(args, mesh_path, script)` for testability.
+- **Dry-run mode**: `--dry-run` prints SLURM script and mesh command but creates
+  no files and does not call `sbatch`.
+- **Mesh generation skipped when `--mesh-file` provided**: avoids requiring gmsh
+  when the user already has a mesh.
+- **SLURM defaults**: 1 node, 1 task, 1h wall time, `batch` partition — conservative
+  defaults for the Oscar cluster.
+
+### Files created/modified
+- `scripts/run_simulation.py` — new: Python driver (~140 lines)
+- `tests/test_driver.py` — new: 10 unit tests covering CLI parsing, SLURM
+  structure, mesh invocation, dry-run mode
+- `PLAN.md` — marked Phases 4 and 6 as Done
+
+### Test results
+- All 10 Phase 6 tests pass (`python -m pytest tests/test_driver.py -v`)
+
+### Next steps (Phase 7)
+- Validation against Schafer-Turek benchmark on fine mesh
+- `tests/test_validation.py`: C_D ∈ [5.57, 5.59], |C_L| < 0.02 at Re=20

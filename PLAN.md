@@ -15,7 +15,7 @@
 | 3 | Solver configuration — PETSc SNES + FGMRES + BoomerAMG | ✅ Done |
 | 4 | Output — ExodusII + drag/lift post-processing | ✅ Done |
 | 5 | CMake build system | ✅ Done |
-| 6 | Python driver | ⬜ Todo |
+| 6 | Python driver | ✅ Done |
 | 7 | Validation against benchmark | ⬜ Todo |
 
 ## Key Decisions
