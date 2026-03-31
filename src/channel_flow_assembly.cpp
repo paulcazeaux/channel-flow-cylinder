@@ -141,7 +141,9 @@ bool ChannelFlowSystem::element_constraint(bool request_jacobian,
         Kpv = &c.get_elem_jacobian(_p_var, _v_var);
     }
 
-    const libMesh::Real sol_deriv = c.get_elem_solution_derivative();
+    // Note: EulerSolver calls element_constraint at u_new (not u_θ) with
+    // elem_solution_derivative = 1 (see euler_solver.C line 179-182).
+    // So no sol_deriv scaling is needed here.
 
     for (unsigned int qp = 0; qp < n_qp; ++qp) {
         const libMesh::Gradient grad_u = c.interior_gradient(_u_var, qp);
@@ -156,8 +158,8 @@ bool ChannelFlowSystem::element_constraint(bool request_jacobian,
 
             if (request_jacobian) {
                 for (std::size_t j = 0; j < n_u_dofs; ++j) {
-                    (*Kpu)(i,j) -= jxw * sol_deriv * dphi[j][qp](0) * psi_i;
-                    (*Kpv)(i,j) -= jxw * sol_deriv * dphi[j][qp](1) * psi_i;
+                    (*Kpu)(i,j) -= jxw * dphi[j][qp](0) * psi_i;
+                    (*Kpv)(i,j) -= jxw * dphi[j][qp](1) * psi_i;
                 }
             }
         }
@@ -191,10 +193,17 @@ bool ChannelFlowSystem::mass_residual(bool request_jacobian,
         Mvv = &c.get_elem_jacobian(_v_var, _v_var);
     }
 
+    // EulerSolver sets elem_solution_rate = (u_new - u_old)/dt before
+    // calling mass_residual.  Use interior_rate() to read u̇, not
+    // interior_value() which gives u_θ (the blended state).
+    // Jacobian: ∂(M·u̇)/∂u = M · (∂u̇/∂u) = M · elem_solution_rate_derivative.
+    const libMesh::Real rate_deriv = c.get_elem_solution_rate_derivative();
+
     for (unsigned int qp = 0; qp < n_qp; ++qp) {
-        const libMesh::Number u_dot = c.interior_value(_u_var, qp);
-        const libMesh::Number v_dot = c.interior_value(_v_var, qp);
-        const libMesh::Real   jxw   = JxW[qp];
+        libMesh::Number u_dot, v_dot;
+        c.interior_rate(_u_var, qp, u_dot);
+        c.interior_rate(_v_var, qp, v_dot);
+        const libMesh::Real jxw = JxW[qp];
 
         for (std::size_t i = 0; i < n_u_dofs; ++i) {
             const libMesh::Real phi_i = phi[i][qp];
@@ -206,8 +215,8 @@ bool ChannelFlowSystem::mass_residual(bool request_jacobian,
             if (request_jacobian) {
                 for (std::size_t j = 0; j < n_u_dofs; ++j) {
                     const libMesh::Real phi_j = phi[j][qp];
-                    (*Muu)(i,j) += jxw * phi_j * phi_i;
-                    (*Mvv)(i,j) += jxw * phi_j * phi_i;
+                    (*Muu)(i,j) += jxw * rate_deriv * phi_j * phi_i;
+                    (*Mvv)(i,j) += jxw * rate_deriv * phi_j * phi_i;
                 }
             }
         }
