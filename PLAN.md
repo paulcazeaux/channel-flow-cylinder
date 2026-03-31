@@ -15,7 +15,7 @@ The `main` branch has a complete, validated **steady-state** solver:
 
 | Aspect | Steady (main branch) | Time-dependent (this branch) |
 |--------|---------------------|------------------------------|
-| Time solver | `SteadySolver` | `EulerSolver` or `Euler2Solver` (BDF2) |
+| Time solver | `SteadySolver` | `EulerSolver` (backward Euler, θ=1) |
 | Mass matrix | Not assembled | `mass_residual()` override needed |
 | Weak form | ν∫∇u·∇w + (u·∇)u·w − p∇·w = 0 | M ∂u/∂t + ν∫∇u·∇w + (u·∇)u·w − p∇·w = 0 |
 | Velocity preconditioner | ILU(1) (Oseen is non-symmetric) | BoomerAMG (M/dt regularises → diag-dominant) |
@@ -54,8 +54,8 @@ Only velocity variables (u, v) contribute; pressure has no mass term.
 
 ### Phase 2 — Time-stepping loop
 
-Replace `SteadySolver` with libMesh's `Euler2Solver` (Crank-Nicolson/BDF2) or
-`EulerSolver` (backward Euler) in `main.cpp`.
+Replace `SteadySolver` with libMesh's `EulerSolver` (backward Euler, θ=1)
+in `main.cpp`.
 
 Key parameters (add to `params.h`):
 ```
@@ -68,7 +68,9 @@ At Re = 5–10 the flow reaches steady state after ~3–5 convective times.
 Convective time scale: L/U_mean ≈ 2.2/0.1 = 22 s at Re = 5.  T_final = 8 s
 is sufficient to see eddies fully developed.
 
-The time loop: `for (t = 0; t < T_FINAL; t += DT) { sys.solve(); advance(); }`.
+The time loop must call `create_dof_constraints(mesh, t)` at each step to
+re-evaluate time-dependent Dirichlet BCs (the inlet ramp), then
+`enforce_constraints_exactly(sys)` to apply them to the solution vector.
 libMesh's `UnsteadySolver` manages old solution vectors automatically.
 
 Update `params.h` with U_MAX for Re = 5–10.
