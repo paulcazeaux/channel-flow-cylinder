@@ -52,11 +52,11 @@ constexpr double SNES_ATOL   = 1.0e-8; ///< Absolute nonlinear residual toleranc
 constexpr double SNES_RTOL   = 1.0e-10;///< Relative nonlinear residual tolerance
 
 // ── Linear solver: FGMRES + fieldsplit Schur (per Newton step) ───────────────
-// Velocity block (u,v) preconditioned by BoomerAMG; pressure block by Jacobi
-// on the assembled Sp approximation (selfp).  Lower-triangular Schur
-// factorisation captures the velocity-pressure coupling.
-// Linear tolerance is set adaptively by libMesh's inexact-Newton framework;
-// we only cap the maximum iteration count.
+// Velocity block → ILU(1): robust for the non-symmetric steady Oseen operator.
+//   BoomerAMG fails here — no mass-matrix term, cell-Pe~30, strongly non-symmetric.
+// Pressure block → BoomerAMG on assembled Sp (SPD): ideal AMG target.
+// Lower-triangular Schur factorisation; selfp Schur approximation.
+// Linear tolerance set adaptively by libMesh's inexact-Newton framework.
 constexpr int    KSP_MAX_IT    = 200;    ///< Maximum Krylov iterations per Newton step
 constexpr int    GMRES_RESTART = 100;    ///< FGMRES restart parameter
 

@@ -125,14 +125,15 @@ int main(int argc, char** argv)
     // Fieldsplit type set programmatically in configure_fieldsplit.
     // Sub-PC options are still set here and picked up at PCSetUp.
 
-    // Velocity sub-PC: single BoomerAMG V-cycle
-    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_ksp_type",       "preonly");
-    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_pc_type",        "hypre");
-    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_pc_hypre_type",  "boomeramg");
+    // Velocity sub-PC: ILU(1) — robust for non-symmetric Oseen operator.
+    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_ksp_type",         "preonly");
+    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_pc_type",          "ilu");
+    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_pc_factor_levels", "1");
 
-    // Pressure sub-PC: Jacobi on Sp (assembled Schur approximation)
-    PetscOptionsSetValue(NULL, "-fieldsplit_pressure_ksp_type",   "preonly");
-    PetscOptionsSetValue(NULL, "-fieldsplit_pressure_pc_type",    "jacobi");
+    // Pressure sub-PC: BoomerAMG on assembled Sp (SPD).
+    PetscOptionsSetValue(NULL, "-fieldsplit_pressure_ksp_type",         "preonly");
+    PetscOptionsSetValue(NULL, "-fieldsplit_pressure_pc_type",          "hypre");
+    PetscOptionsSetValue(NULL, "-fieldsplit_pressure_pc_hypre_type",    "boomeramg");
 
     // Register velocity/pressure IS objects with PETSc fieldsplit.
     ChannelFlowSystem::configure_fieldsplit(sys, mesh, ns);

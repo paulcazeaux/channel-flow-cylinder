@@ -113,14 +113,19 @@ int main(int argc, char** argv)
     // PCFieldSplitSetType, PCFieldSplitSetSchurFactType, PCFieldSplitSetSchurPre).
     // Sub-PC options are still set here via options string and picked up at PCSetUp.
 
-    // Velocity sub-PC: single BoomerAMG V-cycle
-    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_ksp_type",       "preonly");
-    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_pc_type",        "hypre");
-    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_pc_hypre_type",  "boomeramg");
+    // Velocity sub-PC: ILU(1).
+    // BoomerAMG fails on the steady Oseen operator: no mass-matrix term to
+    // regularise, cell-Pe~30 on coarse mesh, strongly non-symmetric Jacobian.
+    // ILU is robust for non-symmetric systems (Elman, Silvester & Wathen).
+    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_ksp_type",         "preonly");
+    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_pc_type",          "ilu");
+    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_pc_factor_levels", "1");
 
-    // Pressure sub-PC: Jacobi on Sp (the assembled Schur approximation, 706×706)
-    PetscOptionsSetValue(NULL, "-fieldsplit_pressure_ksp_type",   "preonly");
-    PetscOptionsSetValue(NULL, "-fieldsplit_pressure_pc_type",    "jacobi");
+    // Pressure sub-PC: BoomerAMG on assembled Sp.
+    // Sp = A10 Diag(A00)^{-1} A01 is SPD — ideal target for AMG.
+    PetscOptionsSetValue(NULL, "-fieldsplit_pressure_ksp_type",         "preonly");
+    PetscOptionsSetValue(NULL, "-fieldsplit_pressure_pc_type",          "hypre");
+    PetscOptionsSetValue(NULL, "-fieldsplit_pressure_pc_hypre_type",    "boomeramg");
 
     // Register velocity/pressure IS objects with PETSc fieldsplit.
     ChannelFlowSystem::configure_fieldsplit(sys, mesh, ns);

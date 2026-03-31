@@ -658,3 +658,55 @@ Both tests pass.  `test_stokes`: 35 FGMRES iterations, 1 Newton step,
 - ExodusII output (write velocity/pressure fields in `.e` format)
 - Drag and lift coefficient computation on the cylinder boundary
 - `test_output.cpp`
+
+---
+
+## 2026-03-30 — Session 10: Fix Fieldsplit Sub-PC for Steady Navier-Stokes
+
+**Topics:** BoomerAMG failure diagnosis on Oseen operator; correct AMG target for
+incompressible NS; swap velocity/pressure sub-PC choices.
+
+### Problem
+
+After Session 9 implemented fieldsplit, `test_stokes` passed (35 iterations) but
+the full NS Newton solve (`Phase 3b`) completely stalled: FGMRES residual made
+essentially zero progress in 200 iterations per Newton step.
+
+### Root cause
+
+The velocity block for **steady** NS is the Oseen operator `A = νK + N(u)`.
+Without a time-stepping mass matrix term `M/dt`, at Re=20 on the coarse mesh the
+cell-Péclet number is ≈ U·h/ν ≈ 0.3·0.1/0.001 = 30.  The block is strongly
+non-symmetric and convection-dominated.  Classical BoomerAMG (Falgout coarsening,
+symmetric SOR smoother) is designed for SPD systems and breaks down completely here.
+
+The Stokes solve worked because the velocity block was the scalar Laplacian `νK`
+(SPD), which AMG handles well.
+
+### Correct preconditioner split
+
+From Elman, Silvester & Wathen "Finite Elements and Fast Iterative Solvers":
+AMG is the right tool for the **pressure block** (Sp is SPD), not the velocity
+block.  For time-dependent NS the `M/dt` term regularises the velocity block and
+makes AMG viable there; for steady NS it is not.
+
+| Block | Preconditioner | Reason |
+|-------|---------------|--------|
+| Velocity A (Oseen) | ILU(1) | Robust for non-symmetric; not AMG-friendly |
+| Pressure Schur Sp | BoomerAMG | SPD assembled matrix; ideal AMG target |
+
+### Result
+
+After swapping the sub-PC options, the full NS Newton solve converges in **4 Newton
+steps** on the coarse mesh.  `test_stokes` still passes (61 iterations, 1 Newton
+step).
+
+### Files modified
+- `src/main.cpp` — velocity: `ilu(1)`, pressure: `hypre boomeramg`
+- `tests/test_stokes.cpp` — same
+- `src/params.h` — updated solver comment
+
+### Next steps (Phase 4)
+- ExodusII output (write `.e` file)
+- Drag and lift coefficient computation on cylinder boundary (BID 4)
+- `test_output.cpp`
