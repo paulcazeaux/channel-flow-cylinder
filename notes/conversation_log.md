@@ -1075,3 +1075,68 @@ expects.
 ### Next steps
 - Run full Re=100 simulation and validate vortex shedding
 - Commit conversation log
+
+---
+
+## Session 16 — 2026-03-31
+
+### Topics
+- Re=100 simulation runs and preconditioner failure diagnosis
+- Movie rendering with pvpython + ffmpeg
+
+### Re=100 simulation: AMG failure and ILU fallback
+
+Ran the solver on the coarse and fine meshes. Both failed at t ≈ 0.84s
+(near the end of the inlet ramp, Re_eff ≈ 93):
+
+- FGMRES hit 200 iterations with no convergence
+- Newton line search shrank to 1.5e-5 with residual stuck at 5.7e-4
+- Root cause: cell Péclet number Pe_h = U·h/ν ≈ 50–140 makes the
+  velocity block too non-symmetric for BoomerAMG
+
+**Fix**: switched velocity sub-PC from BoomerAMG to ILU(1). ILU is
+algebraically robust for non-symmetric systems.
+
+After the switch, both fine and refined meshes completed successfully:
+- Fine mesh (3.5k elem, 16k DOFs): C_D_max = 3.206, C_L_max = 0.972
+- Refined mesh (8k elem, 37k DOFs): C_D_max = 3.223, C_L_max = 1.000
+
+Both inside or very close to the Schafer-Turek 2D-2 benchmark interval
+(C_D_max ∈ [3.22, 3.24], C_L_max ∈ [0.99, 1.01]).
+
+### Preconditioner summary by Reynolds number
+
+| Re | Velocity sub-PC | Reason |
+|----|-----------------|--------|
+| 5–10 | BoomerAMG (θ_s=0.1) | M/dt dominates, block nearly SPD |
+| 20+ | ILU(1) | Advection dominates, block non-symmetric |
+
+This matches the experience from the steady solver (Session 10): AMG fails
+on the non-symmetric Oseen operator at moderate-to-high Re.
+
+### Movie rendering
+
+ParaView's pvpython segfaulted on the compute node (no GPU, no display).
+Fix: use Xvfb to create a virtual X11 display:
+
+```bash
+Xvfb :99 &; DISPLAY=:99 pvpython scripts/render_movie.py
+```
+
+The render_movie.py script:
+1. Loads ExodusII file, computes velocity magnitude via Calculator filter
+2. Sets up 2D camera view with color bar
+3. Renders 81 PNG frames
+4. Assembles into MP4 with ffmpeg (libx264, 15 fps, CRF 18)
+
+Output: results/channel_flow.mp4 (559 KB, 5.4s).
+
+### Files created/modified
+- `src/main.cpp` — velocity sub-PC switched to ILU(1)
+- `scripts/render_movie.py` — new: pvpython rendering + ffmpeg assembly
+- `notes/solver_notes.md` — new: comprehensive solver/preconditioner notes
+- `PLAN.md` — all 6 phases marked Done
+
+### Status
+Vortex shedding branch complete. Simulation validated against
+Schafer-Turek 2D-2 benchmark. Movie produced.
