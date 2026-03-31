@@ -53,8 +53,8 @@ constexpr double SNES_ATOL   = 1.0e-8; ///< Absolute nonlinear residual toleranc
 constexpr double SNES_RTOL   = 1.0e-10;///< Relative nonlinear residual tolerance
 
 // ── Linear solver: FGMRES + fieldsplit Schur (per Newton step) ───────────────
-// Velocity block → ILU(1): robust for the non-symmetric steady Oseen operator.
-//   BoomerAMG fails here — no mass-matrix term, cell-Pe~30, strongly non-symmetric.
+// Velocity block → BoomerAMG: M/dt regularises the operator, making it
+//   diagonally dominant and nearly SPD — ideal for AMG.
 // Pressure block → BoomerAMG on assembled Sp (SPD): ideal AMG target.
 // Lower-triangular Schur factorisation; selfp Schur approximation.
 // Linear tolerance set adaptively by libMesh's inexact-Newton framework.
