@@ -3,12 +3,11 @@
 ## Problem Description
 Simulate **time-dependent** 2D incompressible viscous flow in a channel past a
 circular cylinder, starting from rest and evolving until steady-state eddies form.
-- Reynolds number: Re = 5–10 (laminar, steady-state eddy regime)
-- Expected physics: symmetric recirculation eddies develop behind the cylinder
-  during the transient, reaching a steady state
-- Goal: visualise the eddy development over time (time series of ExodusII snapshots)
-- Reference: Schafer & Turek (1996) DFG benchmark "Flow around a cylinder" (2D-2 case
-  for time-dependent, 2D-1 for steady-state validation)
+- Reynolds number: Re = 100 (laminar, periodic vortex shedding regime)
+- Expected physics: von Karman vortex street — alternating vortices shed from
+  the cylinder, producing periodic oscillations in lift and drag
+- Goal: visualise vortex shedding (time series of ExodusII snapshots)
+- Reference: Schafer & Turek (1996) DFG benchmark "Flow around a cylinder" (2D-2 case)
 
 ## Boundary Conditions
 - Inlet (left): parabolic velocity profile, u = U_max * 4y(H-y)/H², v = 0
