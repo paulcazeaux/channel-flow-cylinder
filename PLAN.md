@@ -16,7 +16,7 @@
 | 4 | Output — ExodusII + drag/lift post-processing | ✅ Done |
 | 5 | CMake build system | ✅ Done |
 | 6 | Python driver | ✅ Done |
-| 7 | Validation against benchmark | ⬜ Todo |
+| 7 | Validation against benchmark | ✅ Done |
 
 ## Key Decisions
 

@@ -792,3 +792,43 @@ Good agreement with the benchmark on the coarse mesh (~1% error on C_D).
 ### Next steps (Phase 7)
 - Validation against Schafer-Turek benchmark on fine mesh
 - `tests/test_validation.py`: C_D ∈ [5.57, 5.59], |C_L| < 0.02 at Re=20
+
+---
+
+## Session 12 (continued) — 2026-03-30
+
+### Topics
+- Phase 7: Schafer-Turek benchmark validation on progressively refined meshes
+
+### Mesh convergence study
+
+| Mesh | lc_far/lc_cyl | Elems | DOFs | C_D | C_L | Newton |
+|------|---------------|-------|------|-----|-----|--------|
+| Coarse | 0.1/0.03 | 244 | 1251 | 5.524 | 0.0106 | 4 |
+| Medium | 0.05/0.01 | 1276 | 6087 | 5.524 | 0.0103 | 4 |
+| Fine | 0.03/0.005 | 3496 | 16332 | 5.561 | 0.0092 | 4 |
+| Refined | 0.02/0.003 | 7990 | 36880 | 5.571 | 0.0104 | 4 |
+
+Schafer-Turek reference: C_D ∈ [5.57, 5.59], C_L ∈ [0.010, 0.011].
+The refined mesh (lc_far=0.02, lc_cyl=0.003) hits the benchmark interval.
+
+### Decisions
+- **Validation mesh**: lc_far=0.02, lc_cyl=0.003 (~8000 elements, 37k DOFs).
+  This is the coarsest mesh that reaches the Schafer-Turek C_D interval with P2/P1.
+- **test_validation.py**: Python test that runs the solver binary via mpirun,
+  parses C_D/C_L from stdout, and checks against benchmark bounds.  Runs once
+  in `setUpModule` and caches output for all 4 checks.
+- **Mesh generated on demand**: `_generate_mesh_if_needed()` calls
+  `generate_mesh.py` if `channel_refine.msh` does not exist.
+
+### Files created/modified
+- `meshes/channel_refine.msh` — refined validation mesh (git-ignored)
+- `tests/test_validation.py` — new: 4 tests (Newton convergence, C_D, C_L, ExodusII)
+- `PLAN.md` — marked Phase 7 as Done
+
+### Test results
+- All 4 Phase 7 tests pass in ~12s (includes solver run)
+
+### Status
+All 7 phases complete. The solver is validated against the Schafer-Turek
+DFG 2D-1 benchmark at Re=20.
