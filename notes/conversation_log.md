@@ -985,3 +985,93 @@ Solver converges in 1 Newton step per time step during ramp-up.
 ### Status
 All time-dependent phases complete.  Solver produces ExodusII time series
 showing eddy development from rest at Re=10.
+
+---
+
+## Session 15 — 2026-03-31
+
+### Topics
+- Vortex shedding branch (Re=100): time integrator, AMG tuning, Newton Jacobian
+
+### Time integrator: Crank-Nicolson (θ=0.5)
+
+Switched from backward Euler (θ=1, first-order) to EulerSolver with θ=0.5
+(Crank-Nicolson, second-order).  This allows dt=0.02 instead of dt=0.005
+(4× fewer steps) for equivalent temporal accuracy.  Euler2Solver was also
+tested but rejected: it evaluates θ·F(u_new) + (1-θ)·F(u_old) with a
+Jacobian that only captures the u_new contribution, giving inherently linear
+Newton convergence with factor (1-θ) = 0.5.
+
+### AMG tuning
+
+Experimented with Guermond's BoomerAMG recipe:
+- **Strong thresholds** (0.1 velocity, 0.7 pressure): 32% fewer FGMRES
+  iterations.  Kept.
+- **Chebyshev smoother**: degraded convergence on non-symmetric velocity
+  block.  Rejected; default hybrid symmetric GS is better here.
+- **Fixed V-cycle count** (Richardson KSP, 2 or 4 V-cycles): too weak as
+  sub-PC inside Schur fieldsplit — FGMRES hit 200-iteration limit.
+  Rejected; keeping preonly (AMG solves to convergence internally).
+
+ILU(1) for velocity was also tested: 22% fewer FGMRES iterations than
+default AMG on the coarse mesh, but strong-threshold AMG was even better.
+
+### Newton Jacobian: restoring quadratic convergence
+
+**The problem**: With Crank-Nicolson (θ=0.5), Newton converged linearly
+with factor 0.5, taking 10 iterations per time step instead of the expected
+2–3 for quadratic convergence.
+
+**Wrong explanation (initially proposed by Claude)**: "The convergence IS
+quadratic, but the quadratic constant C is large at Re=100 due to strong
+advection."  The user correctly challenged this: at residual values ~1e-7,
+we should be well within the quadratic convergence basin.  A test with very
+tight inner FGMRES tolerance (1e-10 relative) confirmed the numbers were
+identical — the linear solve accuracy was never the issue.
+
+**First partial fix**: Multiplied Jacobian entries in `element_time_derivative`
+by `context.get_elem_solution_derivative()` (= θ).  This is the chain-rule
+factor ∂u_θ/∂u = θ, required by libMesh's DiffContext API.  Reduced Newton
+from 10 to 6 iterations, but convergence was still not quadratic.
+
+**Root cause (found by reading libMesh source)**: Two bugs in `mass_residual`:
+
+1. **Wrong function for reading u̇**: `c.interior_value()` reads from
+   `elem_solution`, which the EulerSolver sets to u_θ (the blended state).
+   The correct API is `c.interior_rate()`, which reads from
+   `elem_solution_rate` = (u_new − u_old)/dt.
+
+2. **Missing 1/dt factor on mass Jacobian**: The Jacobian of M·u̇ w.r.t. u
+   is M·(∂u̇/∂u) = M/dt.  The factor `c.get_elem_solution_rate_derivative()`
+   = 1/dt must multiply the mass matrix entries.
+
+Both issues were discovered by reading `euler_solver.C` (cloned from GitHub)
+and the libMesh `fem_system_ex1/naviersystem.C` example, which uses
+`c.interior_rate()` for mass_residual and asserts `elem_solution_derivative
+== 1.0` (i.e., only supports backward Euler).
+
+**Result**: With both fixes, Newton converges quadratically — **2 iterations
+per time step** (down from 10 without fixes, 6 with the θ fix only).
+
+### Lesson learned
+
+When Newton convergence is unexpectedly slow, do not accept hand-waving
+explanations about "large quadratic constants."  At residual ~1e-7 in a
+well-conditioned time-stepping problem, quadratic convergence should be
+evident.  The correct approach is: (1) verify the inner solve is not limiting
+(tighten KSP tolerance); (2) if unchanged, the Jacobian is wrong — read the
+framework source to understand what derivative information the time solver
+expects.
+
+### Files modified
+- `src/channel_flow_assembly.cpp` — sol_deriv in element_time_derivative;
+  interior_rate + rate_deriv in mass_residual; element_constraint unchanged
+  (EulerSolver calls it at u_new with derivative=1)
+- `src/main.cpp` — EulerSolver θ=0.5, strong thresholds 0.1/0.7
+- `src/params.h` — U_MAX=1.5 (Re=100), DT=0.02, THETA=0.5, T_RAMP=1.0
+- `tests/test_stokes.cpp`, `tests/test_output.cpp` — apply inlet ramp at
+  t=T_RAMP for steady tests
+
+### Next steps
+- Run full Re=100 simulation and validate vortex shedding
+- Commit conversation log
