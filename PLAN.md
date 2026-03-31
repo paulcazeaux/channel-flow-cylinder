@@ -27,12 +27,12 @@ The `main` branch has a complete, validated **steady-state** solver:
 
 | # | Phase | Status |
 |---|-------|--------|
-| 1 | Mass matrix assembly (`element_mass_residual`) | ⬜ Todo |
-| 2 | Time-stepping in `main.cpp` (BDF2 loop, dt, T_final) | ⬜ Todo |
-| 3 | Preconditioner update (AMG for velocity block) | ⬜ Todo |
-| 4 | Time-series ExodusII output (snapshots every N steps) | ⬜ Todo |
-| 5 | Per-step drag/lift output C_D(t), C_L(t) | ⬜ Todo |
-| 6 | Testing and validation | ⬜ Todo |
+| 1 | Mass matrix assembly (`mass_residual`) | ✅ Done |
+| 2 | Time-stepping in `main.cpp` (backward Euler loop, dt, T_final) | ✅ Done |
+| 3 | Preconditioner update (AMG for velocity block) | ✅ Done |
+| 4 | Time-series ExodusII output (snapshots every N steps) | ✅ Done |
+| 5 | Per-step drag/lift output C_D(t), C_L(t) | ✅ Done |
+| 6 | Testing and validation | ✅ Done |
 | 7 | Python driver update (time-dependent parameters) | ⬜ Todo |
 
 ## Phase Details

@@ -1,15 +1,15 @@
 #pragma once
 /**
  * @file channel_flow_system.h
- * @brief FEMSystem subclass for steady 2D incompressible Navier-Stokes
- *        on the Schafer-Turek channel-cylinder domain (DFG 2D-1).
+ * @brief FEMSystem subclass for 2D incompressible Navier-Stokes
+ *        on the Schafer-Turek channel-cylinder domain (DFG 2D-1/2D-2).
  *
  * Variables:
  *   u, v  — velocity components, P2 Lagrange (SECOND order)
  *   p     — pressure, P1 Lagrange (FIRST order)
  *
- * Weak form:
- *   Momentum:   ν∫∇u·∇w dx + ∫(u·∇)u·w dx − ∫p∇·w dx = 0
+ * Weak form (time-dependent):
+ *   Momentum:   ∫ρ ∂u/∂t·w dx + ν∫∇u·∇w dx + ∫(u·∇)u·w dx − ∫p∇·w dx = 0
  *   Continuity: ∫q∇·u dx = 0
  *
  * Boundary conditions:
@@ -29,7 +29,11 @@
 
 /**
  * @class ChannelFlowSystem
- * @brief Steady incompressible Navier-Stokes via Taylor-Hood P2/P1 elements.
+ * @brief Incompressible Navier-Stokes via Taylor-Hood P2/P1 elements.
+ *
+ * Supports both steady (SteadySolver) and time-dependent (EulerSolver)
+ * operation.  For time-dependent mode, mass_residual() provides the
+ * ∫ρ ∂u/∂t · w dx term.
  */
 class ChannelFlowSystem : public libMesh::FEMSystem
 {
@@ -77,6 +81,17 @@ public:
      */
     bool element_constraint(bool request_jacobian,
                             libMesh::DiffContext& ctx) override;
+
+    /**
+     * @brief Assemble the mass matrix residual for time-dependent solves.
+     *
+     * Contributes ∫ρ u̇·w dx for velocity variables only (no time derivative
+     * in the continuity equation).  Called by libMesh's UnsteadySolver.
+     *
+     * @return Whether the Jacobian was assembled.
+     */
+    bool mass_residual(bool request_jacobian,
+                       libMesh::DiffContext& ctx) override;
 
     /// Variable index for x-velocity (set during init_data).
     unsigned int u_var() const { return _u_var; }

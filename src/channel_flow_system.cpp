@@ -24,6 +24,7 @@
 #include <petscis.h>
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <set>
 #include <vector>
@@ -33,10 +34,13 @@
 namespace {
 
 /**
- * @brief Parabolic inlet u-velocity: u(y) = 4·U_MAX·y·(H−y)/H²
+ * @brief Time-dependent parabolic inlet u-velocity with smooth ramp-up.
  *
- * Implements FunctionBase so it can be passed to DirichletBoundary.
- * DirichletBoundary clones this object internally, so no lifetime concern.
+ * u(y,t) = 4·U_MAX·y·(H−y)/H² · r(t)
+ *
+ * where r(t) = sin²(π·t / (2·T_RAMP)) for t < T_RAMP, and r(t) = 1 after.
+ * This smooth ramp avoids impulsive startup and produces a visible transient
+ * as eddies develop behind the cylinder.
  */
 class InletVelocityU : public libMesh::FunctionBase<libMesh::Number>
 {
@@ -48,12 +52,20 @@ public:
     }
 
     libMesh::Number operator()(const libMesh::Point& p,
-                               const libMesh::Real /*t*/ = 0.0) override
+                               const libMesh::Real t = 0.0) override
     {
         const double y = p(1);
-        return 4.0 * Params::U_MAX * y
-               * (Params::CHANNEL_HEIGHT - y)
-               / (Params::CHANNEL_HEIGHT * Params::CHANNEL_HEIGHT);
+        const double profile = 4.0 * Params::U_MAX * y
+                               * (Params::CHANNEL_HEIGHT - y)
+                               / (Params::CHANNEL_HEIGHT * Params::CHANNEL_HEIGHT);
+
+        // Smooth ramp: sin²(πt/(2·T_RAMP))
+        double ramp = 1.0;
+        if (t < Params::T_RAMP) {
+            const double s = std::sin(M_PI * t / (2.0 * Params::T_RAMP));
+            ramp = s * s;
+        }
+        return profile * ramp;
     }
 
     void operator()(const libMesh::Point& p,

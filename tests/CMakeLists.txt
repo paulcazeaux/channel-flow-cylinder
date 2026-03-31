@@ -45,3 +45,6 @@ add_solver_test(test_stokes test_stokes.cpp)
 
 # ── Phase 4: ExodusII output + drag/lift ─────────────────────────────────────
 add_solver_test(test_output test_output.cpp)
+
+# ── Time-dependent: time stepping + ramp ─────────────────────────────────────
+add_solver_test(test_timestep test_timestep.cpp)

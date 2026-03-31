@@ -2,9 +2,9 @@
  * @file channel_flow_assembly.cpp
  * @brief Element-level weak-form assembly for ChannelFlowSystem.
  *
- * Implements the Taylor-Hood P2/P1 Galerkin form for steady incompressible
- * Navier-Stokes.  Variable setup and Dirichlet BCs are in
- * channel_flow_system.cpp.
+ * Implements the Taylor-Hood P2/P1 Galerkin form for incompressible
+ * Navier-Stokes, including the mass matrix for time-dependent solves.
+ * Variable setup and Dirichlet BCs are in channel_flow_system.cpp.
  */
 
 #include "channel_flow_system.h"
@@ -150,6 +150,56 @@ bool ChannelFlowSystem::element_constraint(bool request_jacobian,
                 for (std::size_t j = 0; j < n_u_dofs; ++j) {
                     (*Kpu)(i,j) -= jxw * dphi[j][qp](0) * psi_i;
                     (*Kpv)(i,j) -= jxw * dphi[j][qp](1) * psi_i;
+                }
+            }
+        }
+    }
+    return request_jacobian;
+}
+
+// ── Mass matrix assembly (time-dependent) ────────────────────────────────────
+
+bool ChannelFlowSystem::mass_residual(bool request_jacobian,
+                                      libMesh::DiffContext& ctx)
+{
+    libMesh::FEMContext& c = libMesh::cast_ref<libMesh::FEMContext&>(ctx);
+
+    libMesh::FEBase* u_fe = nullptr;
+    c.get_element_fe(_u_var, u_fe);
+
+    const std::vector<libMesh::Real>&              JxW = u_fe->get_JxW();
+    const std::vector<std::vector<libMesh::Real>>& phi = u_fe->get_phi();
+
+    const std::size_t n_u_dofs = c.get_dof_indices(_u_var).size();
+    const unsigned int n_qp    = c.get_element_qrule().n_points();
+
+    libMesh::DenseSubVector<libMesh::Number>& Fu = c.get_elem_residual(_u_var);
+    libMesh::DenseSubVector<libMesh::Number>& Fv = c.get_elem_residual(_v_var);
+
+    libMesh::DenseSubMatrix<libMesh::Number>* Muu = nullptr;
+    libMesh::DenseSubMatrix<libMesh::Number>* Mvv = nullptr;
+    if (request_jacobian) {
+        Muu = &c.get_elem_jacobian(_u_var, _u_var);
+        Mvv = &c.get_elem_jacobian(_v_var, _v_var);
+    }
+
+    for (unsigned int qp = 0; qp < n_qp; ++qp) {
+        const libMesh::Number u_dot = c.interior_value(_u_var, qp);
+        const libMesh::Number v_dot = c.interior_value(_v_var, qp);
+        const libMesh::Real   jxw   = JxW[qp];
+
+        for (std::size_t i = 0; i < n_u_dofs; ++i) {
+            const libMesh::Real phi_i = phi[i][qp];
+
+            // ∫ ρ u̇ · w dx  (ρ = 1 for incompressible)
+            Fu(i) += jxw * u_dot * phi_i;
+            Fv(i) += jxw * v_dot * phi_i;
+
+            if (request_jacobian) {
+                for (std::size_t j = 0; j < n_u_dofs; ++j) {
+                    const libMesh::Real phi_j = phi[j][qp];
+                    (*Muu)(i,j) += jxw * phi_j * phi_i;
+                    (*Mvv)(i,j) += jxw * phi_j * phi_i;
                 }
             }
         }

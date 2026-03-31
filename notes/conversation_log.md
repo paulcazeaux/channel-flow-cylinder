@@ -883,3 +883,83 @@ benchmark interval.  All 4 validation tests pass in ~12s.
 - Phase 1: implement `mass_residual()` in `ChannelFlowSystem`
 - Phase 2: time-stepping loop in `main.cpp`
 - Phase 3: switch velocity sub-PC to BoomerAMG
+
+---
+
+## Session 14 — 2026-03-30
+
+### Topics
+- Implemented time-dependent NS solver (Phases 1–6 of time-dependent plan)
+
+### Key implementation details
+
+**Mass matrix (Phase 1)**: Added `mass_residual()` override to
+`ChannelFlowSystem`.  Assembles ∫ρ u̇·w dx for velocity DOFs only (no time
+derivative in continuity).  Jacobian: standard mass matrix M_ij = ∫φ_i φ_j dx.
+
+**Time stepping (Phase 2)**: Backward Euler via `libMesh::EulerSolver`
+(theta=1.0).  Time loop from t=0 to T_FINAL=8s with dt=0.025s.
+
+**Preconditioner (Phase 3)**: Switched velocity sub-PC from ILU(1) to
+BoomerAMG.  With M/dt regularising the velocity block, AMG now works (unlike
+the steady case where the non-symmetric Oseen operator required ILU).
+
+**Output (Phases 4–5)**: `ExodusII_IO::write_timestep()` appends snapshots
+every OUTPUT_INTERVAL=10 steps to a single `.e` file.  C_D(t) and C_L(t)
+printed at each output step.
+
+**Reynolds number**: Changed U_MAX from 0.3 (Re=20) to 0.15 (Re=10) for
+the time-dependent eddy development.
+
+### Debugging: time-dependent Dirichlet BCs
+
+The main debugging challenge was getting libMesh's Dirichlet BCs to update
+at each time step.
+
+**Problem**: Starting from rest (u=v=0) with a ramp-up inlet BC, the Newton
+solver reported "residual 0" at every time step — the solution never evolved.
+
+**Root cause**: libMesh's `DirichletBoundary` constraint values are computed
+once during `EquationSystems::init()` (at t=0, where ramp=0) and stored in
+`DofMap::_primal_constraint_values`.  These are never automatically updated
+for time-dependent BCs.  `enforce_constraints_exactly()` applies the STORED
+values, not re-evaluated ones.
+
+**Fix**: Call `DofMap::create_dof_constraints(mesh, t)` at each time step
+before `enforce_constraints_exactly(sys)`.  This re-evaluates the Dirichlet
+BC function at the new time and updates the stored constraint values.
+
+```cpp
+sys.time = t;
+sys.get_dof_map().create_dof_constraints(mesh, t);
+sys.get_dof_map().enforce_constraints_exactly(sys);
+sys.update();
+sys.solve();
+sys.time_solver->advance_timestep();
+```
+
+**Inlet ramp**: Smooth sin² ramp over T_RAMP=2s:
+  u(y,t) = 4·U_MAX·y·(H−y)/H² · sin²(πt/(2·T_RAMP))
+
+### Simulation results (coarse mesh, Re=10)
+
+C_D(t) evolution:
+  t=0.25: 0.45, t=0.50: 1.75, t=0.75: 3.71, t=1.0: 6.11,
+  t=1.5: 10.9, t=2.0: 13.0, t>2.0: 13.03 (steady state)
+
+33 ExodusII snapshots written to results/channel_flow.e.
+Solver converges in 1 Newton step per time step during ramp-up.
+
+### Files created/modified
+- `src/channel_flow_system.h` — added `mass_residual()` declaration
+- `src/channel_flow_assembly.cpp` — added `mass_residual()` implementation
+- `src/channel_flow_system.cpp` — time-dependent InletVelocityU with sin² ramp
+- `src/main.cpp` — rewritten: EulerSolver time loop, create_dof_constraints
+- `src/params.h` — added DT, T_FINAL, T_RAMP, OUTPUT_INTERVAL, THETA; U_MAX→0.15
+- `tests/test_timestep.cpp` — new: 20-step test (C_D evolution, multi-step output)
+- `tests/CMakeLists.txt` — added test_timestep
+- `PLAN.md` — marked Phases 1–6 as Done
+
+### Next steps
+- Phase 7: update Python driver for time-dependent parameters
+- Run on fine mesh for better visualisation

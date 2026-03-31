@@ -27,9 +27,10 @@ constexpr double RHO = 1.0;     ///< Fluid density ρ [kg/m³]
 // ── Inlet velocity (parabolic profile) ───────────────────────────────────────
 ///   u(0, y) = 4 · U_MAX · y · (H − y) / H²,   v = 0
 ///
-/// U_MAX = 0.3  m/s  →  U_MEAN = 0.2  m/s  →  Re = 20  (Schafer-Turek ref.)
-/// U_MAX = 0.075 m/s →  U_MEAN = 0.05 m/s  →  Re =  5  (primary target)
-constexpr double U_MAX  = 0.3;                    ///< Peak inlet velocity [m/s]
+/// U_MAX = 0.3  m/s  →  U_MEAN = 0.2  m/s  →  Re = 20  (Schafer-Turek 2D-1)
+/// U_MAX = 0.15 m/s  →  U_MEAN = 0.1  m/s  →  Re = 10
+/// U_MAX = 0.075 m/s →  U_MEAN = 0.05 m/s  →  Re =  5
+constexpr double U_MAX  = 0.15;                   ///< Peak inlet velocity [m/s]
 constexpr double U_MEAN = (2.0 / 3.0) * U_MAX;   ///< Mean inlet velocity [m/s]
 
 /// Reynolds number: Re = U_MEAN · D / ν
@@ -63,6 +64,13 @@ constexpr int    GMRES_RESTART = 100;    ///< FGMRES restart parameter
 // ── Drag/lift normalisation ───────────────────────────────────────────────────
 ///   C_D = 2 F_D / (ρ U_MEAN² D),   C_L = 2 F_L / (ρ U_MEAN² D)
 constexpr double DRAG_LIFT_NORM = 2.0 / (RHO * U_MEAN * U_MEAN * CYL_DIAMETER);
+
+// ── Time-dependent solver ─────────────────────────────────────────────────────
+constexpr double DT             = 0.025;  ///< Time step [s]
+constexpr double T_FINAL        = 8.0;    ///< Final simulation time [s]
+constexpr double T_RAMP         = 2.0;    ///< Inlet velocity ramp-up time [s]
+constexpr int    OUTPUT_INTERVAL = 10;    ///< Write ExodusII snapshot every N steps
+constexpr double THETA          = 1.0;    ///< 1.0 = backward Euler, 0.5 = Crank-Nicolson
 
 // ── Output ────────────────────────────────────────────────────────────────────
 constexpr const char* OUTPUT_FILE = "results/channel_flow.e"; ///< ExodusII output path
