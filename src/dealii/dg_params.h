@@ -42,9 +42,9 @@ constexpr double SIGMA_V = 10.0 * DG_ORDER * DG_ORDER;
 constexpr double GAMMA_P = 0.0;
 
 // ── Time stepping (IMEX-ARK3) ────────────────────────────────────────────────
-constexpr double DT      = 0.001;
-constexpr double T_FINAL = 0.1;   // Short run for testing
-constexpr double T_RAMP  = 0.05;  // Quick ramp for testing
+constexpr double DT      = 0.002;   // DG CFL safe for k=2, h_min≈0.04, U≈2
+constexpr double T_FINAL = 4.0;
+constexpr double T_RAMP  = 1.0;    // Smooth ramp over 1s
 
 /// SDIRK diagonal coefficient for IMEX-ARK3 (Kennedy & Carpenter 2003).
 constexpr double IMEX_GAMMA = 0.4358665215;
@@ -57,7 +57,7 @@ constexpr double VELOCITY_TOL    = 1.0e-8;
 constexpr int    AMG_V_CYCLES    = 2;
 
 // ── Output ───────────────────────────────────────────────────────────────────
-constexpr int         OUTPUT_INTERVAL = 5;
+constexpr int         OUTPUT_INTERVAL = 100;
 constexpr const char* OUTPUT_FILE     = "results/dg_channel_flow";
 
 // ── Drag/lift normalization ──────────────────────────────────────────────────

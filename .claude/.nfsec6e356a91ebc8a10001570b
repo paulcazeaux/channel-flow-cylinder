@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//oscar/home/pcazeaux/**)",
+      "Bash(source /users/pcazeaux/data/spack/share/spack/setup-env.sh)",
+      "Bash(spack spec:*)",
+      "Bash(source ~/data/spack/share/spack/setup-env.sh)",
+      "Bash(spack install:*)",
+      "Bash(tee ~/data/libmesh_master_install.log)",
+      "Bash(source /oscar/data/icerm/spack/share/spack/setup-env.sh)",
+      "Bash(spack find:*)",
+      "Bash(module avail:*)",
+      "Bash(spack load:*)",
+      "Bash(mpirun -n 1 --mca opal_warn_on_missing_libcuda 0 /users/pcazeaux/channel-flow-cylinder/build/tests/test_spaces TEST_MESH=/users/pcazeaux/channel-flow-cylinder/meshes/channel_coarse.msh)",
+      "Bash(cmake --build /oscar/home/pcazeaux/channel-flow-cylinder/build -j4)",
+      "Bash(ctest -R test_dg_stokes --output-on-failure)"
+    ]
+  }
+}

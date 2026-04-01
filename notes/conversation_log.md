@@ -1338,9 +1338,23 @@ Root cause analysis for poor preconditioning:
 - Causes exponential blowup at any dt (even dt=0.001)
 - Fix: rewrite in conservative form with integration by parts
 
+### Advection operator (conservative form implemented, unstable)
+- Rewrote from strong form to conservative DG form:
+  Volume: -∫ u_c (u · ∇w_c), Face: Lax-Friedrichs
+- Stable for short runs (t<0.5) at low velocities
+- Blows up when flow reaches cylinder (~t=0.7-1.0, max|u|≈1.5)
+- Stokes-only is completely stable to T=4 — confirms advection is the issue
+- Root cause TBD: likely sign error or missing term in face flux
+
+### AMG caching
+- AMG created as static local in solve_schur (first call only)
+- Previous attempt with unique_ptr member caused Release-mode crash
+  (incomplete type in destructor, PETSc cleanup order issue)
+- Static local works but gives MPI_Finalize warning at exit (cosmetic)
+
 ### Next steps
-1. Fix advection: conservative DG form with IBP
-2. Verify stability with CFL-limited dt
-3. Upgrade to IMEX-ARK3 (3rd order, larger CFL)
+1. Debug advection operator (conservative DG form)
+2. Verify with manufactured solution or energy conservation test
+3. IMEX-ARK3 time stepper
 4. Longer runs, drag/lift computation
 5. Validation against Schafer-Turek

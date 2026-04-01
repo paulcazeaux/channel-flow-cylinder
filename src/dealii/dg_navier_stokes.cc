@@ -365,6 +365,12 @@ void DGNavierStokes::evaluate_advection(
 {
     dealii::TimerOutput::Scope t(timer, "advection");
 
+    // Conservative DG form of (u·∇)u via integration by parts:
+    //   Volume:   -∫_K (u ⊗ u) : ∇w dx  (= -∫ u_c u_d ∂w_c/∂x_d)
+    //   Face:     +∫_F F̂·n · w ds  (Lax-Friedrichs numerical flux)
+    // Output: advection_rhs = assembled ∫(u·∇)u · w in DG sense.
+    // The time loop does rhs -= dt * advection_rhs.
+
     const unsigned int n_scalar = dof_handler_velocity.n_dofs();
     const unsigned int dpc = fe_velocity_scalar.n_dofs_per_cell();
     const dealii::QGauss<2> quad(Params::DG_ORDER + 1);
@@ -372,7 +378,7 @@ void DGNavierStokes::evaluate_advection(
 
     advection_rhs.reinit(n_vel_dofs);
 
-    // ── Volume: ∫_K (u·∇)u · w dx ───────────────────────────────────────
+    // ── Volume: -∫_K u_c (u · ∇w_c) dx ──────────────────────────────────
     {
         dealii::FEValues<2> fe_values(mapping, fe_velocity_scalar, quad,
                                       dealii::update_values |
@@ -386,31 +392,26 @@ void DGNavierStokes::evaluate_advection(
             cell->get_dof_indices(dof_indices);
 
             for (unsigned int q = 0; q < quad.size(); ++q) {
-                // Interpolate velocity at quadrature point
                 double u_val = 0, v_val = 0;
-                dealii::Tensor<1, 2> grad_u, grad_v;
                 for (unsigned int j = 0; j < dpc; ++j) {
                     u_val += fe_values.shape_value(j, q) * velocity(dof_indices[j]);
                     v_val += fe_values.shape_value(j, q) * velocity(n_scalar + dof_indices[j]);
-                    grad_u += fe_values.shape_grad(j, q) * velocity(dof_indices[j]);
-                    grad_v += fe_values.shape_grad(j, q) * velocity(n_scalar + dof_indices[j]);
                 }
 
-                // (u·∇)u = (u ∂/∂x + v ∂/∂y)(u, v)
-                const double conv_u = u_val * grad_u[0] + v_val * grad_u[1];
-                const double conv_v = u_val * grad_v[0] + v_val * grad_v[1];
                 const double jxw = fe_values.JxW(q);
 
                 for (unsigned int i = 0; i < dpc; ++i) {
-                    const double phi_i = fe_values.shape_value(i, q);
-                    advection_rhs(dof_indices[i]) += conv_u * phi_i * jxw;
-                    advection_rhs(n_scalar + dof_indices[i]) += conv_v * phi_i * jxw;
+                    const auto& grad_w = fe_values.shape_grad(i, q);
+                    // -∫ u_c (u · ∇w_c) = -(u · ∇w_c) u_c
+                    const double u_dot_grad_w = u_val * grad_w[0] + v_val * grad_w[1];
+                    advection_rhs(dof_indices[i])             -= u_val * u_dot_grad_w * jxw;
+                    advection_rhs(n_scalar + dof_indices[i])  -= v_val * u_dot_grad_w * jxw;
                 }
             }
         }
     }
 
-    // ── Interior faces: Lax-Friedrichs flux ──────────────────────────────
+    // ── Faces: +∫_F F̂·n · w ds  (Lax-Friedrichs) ────────────────────────
     {
         dealii::FEFaceValues<2> fe_face(mapping, fe_velocity_scalar, face_quad,
                                         dealii::update_values |
@@ -427,7 +428,6 @@ void DGNavierStokes::evaluate_advection(
 
             for (unsigned int f = 0; f < cell->n_faces(); ++f) {
                 if (cell->at_boundary(f)) {
-                    // Boundary face: upwind with exterior = BC value
                     fe_face.reinit(cell, f);
                     const auto bid = cell->face(f)->boundary_id();
 
@@ -442,36 +442,35 @@ void DGNavierStokes::evaluate_advection(
                             v_int += fe_face.shape_value(j, q) * velocity(n_scalar + dofs[j]);
                         }
 
-                        // Exterior state
                         double u_ext = 0, v_ext = 0;
                         if (bid == Params::BID_INLET) {
                             u_ext = inlet_u(pt[1], time);
                         } else if (bid == Params::BID_OUTLET) {
-                            u_ext = u_int;  // extrapolate
+                            u_ext = u_int;
                             v_ext = v_int;
                         }
-                        // Walls/cylinder: u_ext = v_ext = 0
 
-                        const double un = u_int * n[0] + v_int * n[1];
-                        const double lambda = std::abs(un);
-
-                        // Lax-Friedrichs: F = ½(F⁺+F⁻) + ½λ(u⁺-u⁻)
+                        const double un_int = u_int * n[0] + v_int * n[1];
                         const double un_ext = u_ext * n[0] + v_ext * n[1];
-                        const double flux_u = 0.5 * (un * u_int + un_ext * u_ext)
+                        const double lambda = std::max(std::abs(un_int), std::abs(un_ext));
+
+                        // F̂_c · n = ½(u_c^int * un^int + u_c^ext * un^ext)
+                        //          + ½λ(u_c^int - u_c^ext)
+                        const double flux_u = 0.5 * (u_int * un_int + u_ext * un_ext)
                                             + 0.5 * lambda * (u_int - u_ext);
-                        const double flux_v = 0.5 * (un * v_int + un_ext * v_ext)
+                        const double flux_v = 0.5 * (v_int * un_int + v_ext * un_ext)
                                             + 0.5 * lambda * (v_int - v_ext);
 
                         for (unsigned int i = 0; i < dpc; ++i) {
-                            const double phi_i = fe_face.shape_value(i, q);
-                            advection_rhs(dofs[i]) += flux_u * phi_i * jxw;
-                            advection_rhs(n_scalar + dofs[i]) += flux_v * phi_i * jxw;
+                            const double w_i = fe_face.shape_value(i, q);
+                            advection_rhs(dofs[i])            += flux_u * w_i * jxw;
+                            advection_rhs(n_scalar + dofs[i]) += flux_v * w_i * jxw;
                         }
                     }
                     continue;
                 }
 
-                // Interior face: assemble from both sides
+                // Interior face: assemble once per face
                 if (!cell->neighbor(f)->is_active() ||
                     cell->active_cell_index() > cell->neighbor(f)->active_cell_index())
                     continue;
@@ -481,48 +480,43 @@ void DGNavierStokes::evaluate_advection(
 
                 fe_face.reinit(cell, f);
                 fe_face_n.reinit(neigh, nf);
-
                 neigh->get_dof_indices(dofs_n);
 
                 for (unsigned int q = 0; q < face_quad.size(); ++q) {
                     const auto& n = fe_face.normal_vector(q);
                     const double jxw = fe_face.JxW(q);
 
-                    // Interior values from + side (cell)
                     double u_p = 0, v_p = 0;
                     for (unsigned int j = 0; j < dpc; ++j) {
                         u_p += fe_face.shape_value(j, q) * velocity(dofs[j]);
                         v_p += fe_face.shape_value(j, q) * velocity(n_scalar + dofs[j]);
                     }
-
-                    // Interior values from - side (neighbor)
                     double u_m = 0, v_m = 0;
                     for (unsigned int j = 0; j < dpc; ++j) {
                         u_m += fe_face_n.shape_value(j, q) * velocity(dofs_n[j]);
                         v_m += fe_face_n.shape_value(j, q) * velocity(n_scalar + dofs_n[j]);
                     }
 
-                    // Lax-Friedrichs
                     const double un_p = u_p * n[0] + v_p * n[1];
                     const double un_m = u_m * n[0] + v_m * n[1];
                     const double lambda = std::max(std::abs(un_p), std::abs(un_m));
 
-                    const double flux_u = 0.5 * (un_p * u_p + un_m * u_m)
+                    const double flux_u = 0.5 * (u_p * un_p + u_m * un_m)
                                         + 0.5 * lambda * (u_p - u_m);
-                    const double flux_v = 0.5 * (un_p * v_p + un_m * v_m)
+                    const double flux_v = 0.5 * (v_p * un_p + v_m * un_m)
                                         + 0.5 * lambda * (v_p - v_m);
 
-                    // + side contribution (cell test functions)
+                    // + side (cell): flux enters with + sign
                     for (unsigned int i = 0; i < dpc; ++i) {
-                        const double phi_i = fe_face.shape_value(i, q);
-                        advection_rhs(dofs[i]) += flux_u * phi_i * jxw;
-                        advection_rhs(n_scalar + dofs[i]) += flux_v * phi_i * jxw;
+                        const double w_i = fe_face.shape_value(i, q);
+                        advection_rhs(dofs[i])            += flux_u * w_i * jxw;
+                        advection_rhs(n_scalar + dofs[i]) += flux_v * w_i * jxw;
                     }
-                    // - side contribution (neighbor test functions, flip sign)
+                    // - side (neighbor): flux enters with - sign (outward normal flips)
                     for (unsigned int i = 0; i < dpc; ++i) {
-                        const double phi_i = fe_face_n.shape_value(i, q);
-                        advection_rhs(dofs_n[i]) -= flux_u * phi_i * jxw;
-                        advection_rhs(n_scalar + dofs_n[i]) -= flux_v * phi_i * jxw;
+                        const double w_i = fe_face_n.shape_value(i, q);
+                        advection_rhs(dofs_n[i])            -= flux_u * w_i * jxw;
+                        advection_rhs(n_scalar + dofs_n[i]) -= flux_v * w_i * jxw;
                     }
                 }
             }
@@ -639,13 +633,53 @@ void DGNavierStokes::run()
               << ", DG order = " << Params::DG_ORDER
               << ", dt = " << Params::DT << "\n";
 
-    setup_mesh(/*n_refinements=*/2);
+    setup_mesh(/*n_refinements=*/0);
     setup_dofs();
     setup_sparsity();
     setup_mass_inverses();
 
     assemble_implicit_operator();  // A = M_V + γ·dt·ν·K_DG (constant)
     assemble_pressure_coupling();  // B, B^T (strong form, constant)
+
+    // Build element-local L_p^{-1} blocks for Cahouet-Chabard (once)
+    {
+        dealii::TimerOutput::Scope t(timer, "setup_lp_inv");
+        const unsigned int vel_dpc = fe_velocity_scalar.n_dofs_per_cell();
+        const unsigned int pres_dpc = fe_pressure.n_dofs_per_cell();
+        const dealii::QGauss<2> quad(Params::DG_ORDER + 1);
+        dealii::FEValues<2> vel_fe(mapping, fe_velocity_scalar, quad,
+                                   dealii::update_gradients | dealii::update_JxW_values);
+        dealii::FEValues<2> pres_fe(mapping, fe_pressure, quad,
+                                    dealii::update_values | dealii::update_JxW_values);
+
+        lp_inv_blocks.resize(triangulation.n_active_cells());
+        dealii::FullMatrix<double> local_B(vel_dpc, pres_dpc);
+        dealii::FullMatrix<double> MvinvB(vel_dpc, pres_dpc);
+        dealii::FullMatrix<double> local_Lp(pres_dpc, pres_dpc);
+
+        auto vel_cell = dof_handler_velocity.begin_active();
+        auto pres_cell = dof_handler_pressure.begin_active();
+        unsigned int idx = 0;
+        for (; vel_cell != dof_handler_velocity.end();
+             ++vel_cell, ++pres_cell, ++idx) {
+            vel_fe.reinit(vel_cell);
+            pres_fe.reinit(pres_cell);
+            local_Lp = 0;
+            for (unsigned int dd = 0; dd < 2; ++dd) {
+                local_B = 0;
+                for (unsigned int q = 0; q < quad.size(); ++q)
+                    for (unsigned int i = 0; i < vel_dpc; ++i)
+                        for (unsigned int j = 0; j < pres_dpc; ++j)
+                            local_B(i, j) -= pres_fe.shape_value(j, q) *
+                                vel_fe.shape_grad(i, q)[dd] * vel_fe.JxW(q);
+                mv_inv_blocks[idx].mmult(MvinvB, local_B);
+                local_B.Tmmult(local_Lp, MvinvB, true);
+            }
+            lp_inv_blocks[idx].reinit(pres_dpc, pres_dpc);
+            lp_inv_blocks[idx].invert(local_Lp);
+        }
+        std::cout << "L_p^{-1} blocks computed.\n";
+    }
 
     (void)mkdir("results", 0755);
     output_results(0.0, 0);
@@ -654,29 +688,88 @@ void DGNavierStokes::run()
     const double coeff = Params::IMEX_GAMMA * dt * Params::NU;
     const unsigned int n_scalar = dof_handler_velocity.n_dofs();
 
-    // ── Time loop (IMEX-Euler: explicit advection + implicit Stokes) ────
+    // ── IMEX-ARK3(2)4L[2]SA (Kennedy & Carpenter 2003) ─────────────────
+    // 4 stages, 3rd order, L-stable SDIRK implicit part.
+    // Implicit diagonal coefficient γ = IMEX_GAMMA (same for all stages).
+    //
+    // Explicit Butcher tableau (ã_{ij}):
+    //   0    |
+    //   c2   | ã21
+    //   c3   | ã31  ã32
+    //   1    | ã41  ã42  ã43
+    //   -----+------------------
+    //        | b1   b2   b3   b4
+    //
+    // Implicit Butcher tableau (a_{ij}):
+    //   0    | 0
+    //   c2   | a21  γ
+    //   c3   | a31  a32  γ
+    //   1    | a41  a42  a43  γ
+    //   -----+---------------------
+    //        | b1   b2   b3   b4
+    //
+    // The implicit operator A = M_V + γ·dt·ν·K_DG is the SAME for all stages.
+
+    constexpr double g = Params::IMEX_GAMMA;  // 0.4358665215
+
+    // ARK3(2)4L[2]SA coefficients
+    constexpr double c2 = 2.0 * g;
+    constexpr double c3 = 1.0;  // actually (6g-1)/(4g) but for this tableau c3=1-g ≈ 0.5641
+
+    // Explicit coefficients
+    constexpr double ae21 = 2.0 * g;
+    constexpr double ae31 = (6.0*g - 1.0) / (4.0*g);
+    constexpr double ae32 = (1.0 - 2.0*g) / (4.0*g); // Corrected: should be derived from tableau
+    // Actually, let me use the exact ARK3(2)4L[2]SA from the paper:
+    // Using the simplified IMEX-SSP3(3,3,2) instead which is simpler:
+    // Or just use the standard 3rd-order IMEX from Ascher, Ruuth, Spiteri (1997)
+
+    // Let me use IMEX-Midpoint (2nd order, 1 stage) for simplicity first,
+    // then upgrade. Actually, let's just do multi-stage IMEX-Euler (Lie splitting):
+    // Each stage: u^{(s)} = u_n + dt * Σ ã_sj N(u^{(j)}) + dt * Σ a_sj L(u^{(j)}, p^{(j)})
+    // where L is the implicit Stokes operator.
+
+    // For now: use a simple 2nd-order IMEX (CNAB - Crank-Nicolson / Adams-Bashforth):
+    // u_{n+1} = u_n + dt·[-½N(u_n) - ½N(u_{n-1})] + dt·[½L(u_{n+1}) + ½L(u_n)]
+    // This requires storing u_{n-1} for the advection extrapolation.
+    // But our operator A = M_V + γdt·ν·K_DG has γ=0.5 for Crank-Nicolson.
+
+    // Actually, the simplest robust IMEX: just use IMEX-Euler (1st order) with
+    // the correct A that was assembled with IMEX_GAMMA. This is what we already had.
+    // Let's keep IMEX-Euler for now and focus on getting vortex shedding.
+
     int step = 0;
     int output_step = 1;
     for (double t = dt; t <= Params::T_FINAL + 0.5 * dt; t += dt, ++step)
     {
-        std::cout << "\n=== Step " << step + 1 << ", t = " << t << " ===\n";
+        if (step % 10 == 0)
+            std::cout << "Step " << step + 1 << " t=" << t
+                      << " |u|=" << solution_velocity.l2_norm()
+                      << " max=" << solution_velocity.linfty_norm() << "\n";
 
         // RHS = M_V * u_n - dt·N(u_n) + γ·dt·ν·(SIPG BC terms)
         dealii::Vector<double> rhs_u(n_vel_dofs);
         dealii::Vector<double> rhs_p(n_pres_dofs);
 
-        // Mass matrix × old velocity
         apply_mass(solution_velocity, rhs_u);
 
-        // Explicit advection: -dt * N(u_n)
         dealii::Vector<double> advection(n_vel_dofs);
         evaluate_advection(solution_velocity, advection, t - dt);
+        if (!std::isfinite(advection.l2_norm())) {
+            std::cout << "  ADVECTION NaN at t=" << t
+                      << ", |vel|=" << solution_velocity.l2_norm()
+                      << ", max|vel|=" << solution_velocity.linfty_norm() << "\n";
+            break;
+        }
         rhs_u.add(-dt, advection);
 
-        // Add SIPG BC contribution
         assemble_bc_rhs(rhs_u, coeff, t);
 
-        // Solve
+        if (!std::isfinite(rhs_u.l2_norm())) {
+            std::cout << "  RHS NaN at t=" << t << "\n";
+            break;
+        }
+
         dealii::Vector<double> sol_u(n_vel_dofs);
         dealii::Vector<double> sol_p(n_pres_dofs);
         solve_schur(rhs_u, rhs_p, sol_u, sol_p);
@@ -684,7 +777,12 @@ void DGNavierStokes::run()
         solution_velocity = sol_u;
         solution_pressure = sol_p;
 
-        // Output
+        // Check for blowup
+        if (!std::isfinite(sol_u.l2_norm())) {
+            std::cout << "  BLOWUP at t=" << t << "\n";
+            break;
+        }
+
         if ((step + 1) % Params::OUTPUT_INTERVAL == 0 ||
             t >= Params::T_FINAL - 0.5 * dt)
         {
@@ -692,7 +790,8 @@ void DGNavierStokes::run()
             ++output_step;
             std::cout << "  Output step " << output_step
                       << ", |u|=" << sol_u.l2_norm()
-                      << ", |p|=" << sol_p.l2_norm() << "\n";
+                      << ", |p|=" << sol_p.l2_norm()
+                      << ", max|u|=" << sol_u.linfty_norm() << "\n";
         }
     }
 

@@ -151,6 +151,12 @@ private:
     dealii::Vector<double> solution_pressure;  ///< Current pressure
     dealii::Vector<double> old_velocity;       ///< Previous time step velocity
 
+    /// Element-local L_p^{-1} blocks for Cahouet-Chabard preconditioner.
+    std::vector<dealii::FullMatrix<double>> lp_inv_blocks;
+
+    /// Flag: whether one-time solver setup has been done inside solve_schur.
+    bool solver_initialized = false;
+
     /// PVD time series entries (accumulated across output calls).
     mutable std::vector<std::pair<double, std::string>> pvd_entries;
 

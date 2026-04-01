@@ -11,70 +11,15 @@
 
 #include "dg_navier_stokes.h"
 #include "dg_params.h"
+#include "amg_preconditioner.h"
 
 #include <deal.II/lac/solver_cg.h>
 #include <deal.II/lac/solver_gmres.h>
 #include <deal.II/lac/precondition.h>
-#include <deal.II/lac/petsc_precondition.h>
-#include <deal.II/lac/petsc_sparse_matrix.h>
-#include <deal.II/lac/petsc_vector.h>
-#include <deal.II/lac/petsc_solver.h>
 
 #include <iostream>
 
 using namespace dealii;
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  AMG wrapper: converts deal.II SparseMatrix to PETSc and applies BoomerAMG
-// ═══════════════════════════════════════════════════════════════════════════════
-
-class AMGPreconditioner
-{
-public:
-    AMGPreconditioner(const SparseMatrix<double>& matrix,
-                      const SparsityPattern& sp,
-                      double strong_threshold)
-    {
-        // Copy deal.II sparse matrix to PETSc using per-row nnz
-        const unsigned int n = matrix.m();
-        std::vector<unsigned int> row_lengths(n);
-        for (unsigned int row = 0; row < n; ++row)
-            row_lengths[row] = sp.row_length(row);
-
-        petsc_matrix.reinit(n, n, row_lengths);
-
-        for (unsigned int row = 0; row < n; ++row)
-            for (auto it = matrix.begin(row); it != matrix.end(row); ++it)
-                petsc_matrix.set(it->row(), it->column(), it->value());
-        petsc_matrix.compress(VectorOperation::insert);
-
-        // Configure BoomerAMG
-        PETScWrappers::PreconditionBoomerAMG::AdditionalData data;
-        data.symmetric_operator = true;
-        data.strong_threshold = strong_threshold;
-        amg.initialize(petsc_matrix, data);
-    }
-
-    /// @brief Apply one V-cycle: dst = AMG^{-1} src
-    void vmult(Vector<double>& dst, const Vector<double>& src) const
-    {
-        // Copy to PETSc vectors
-        PETScWrappers::MPI::Vector petsc_src(MPI_COMM_SELF, src.size(), src.size());
-        PETScWrappers::MPI::Vector petsc_dst(MPI_COMM_SELF, dst.size(), dst.size());
-        for (unsigned int i = 0; i < src.size(); ++i)
-            petsc_src(i) = src(i);
-        petsc_src.compress(VectorOperation::insert);
-
-        amg.vmult(petsc_dst, petsc_src);
-
-        for (unsigned int i = 0; i < dst.size(); ++i)
-            dst(i) = petsc_dst(i);
-    }
-
-private:
-    PETScWrappers::SparseMatrix petsc_matrix;
-    PETScWrappers::PreconditionBoomerAMG amg;
-};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  SchurOperator: -S = B^T A^{-1} B (positive semi-definite)
@@ -191,8 +136,14 @@ void DGNavierStokes::solve_schur(const Vector<double>& rhs_u,
     const unsigned int n_scalar = dof_handler_velocity.n_dofs();
     const double gamma_dt = Params::IMEX_GAMMA * Params::DT;
 
-    // ── AMG on A (strong threshold 0.1, Guermond) ────────────────────────
-    AMGPreconditioner A_amg(matrix_A, sparsity_A, /*strong_threshold=*/0.1);
+    // AMG on A: created on first call, reused thereafter (A is constant).
+    static std::unique_ptr<AMGPreconditioner> cached_amg;
+    if (!cached_amg) {
+        std::cout << "  Setting up AMG preconditioner (once)...\n";
+        cached_amg = std::make_unique<AMGPreconditioner>(
+            matrix_A, sparsity_A, /*strong_threshold=*/0.1);
+    }
+    const AMGPreconditioner& A_amg = *cached_amg;
 
     // ── Step 1: velocity pre-solve ───────────────────────────────────────
     Vector<double> z(n_vel_dofs);
@@ -201,11 +152,14 @@ void DGNavierStokes::solve_schur(const Vector<double>& rhs_u,
         for (unsigned int i = 0; i < n_scalar; ++i)
             rhs_d(i) = rhs_u(d * n_scalar + i);
 
-        SolverControl control(200, 1e-8 * rhs_d.l2_norm());
+        SolverControl control(200, std::max(1e-8 * rhs_d.l2_norm(), 1e-14));
         SolverCG<Vector<double>> cg(control);
-        cg.solve(matrix_A, sol_d, rhs_d, A_amg);
-        std::cout << "  Pre-solve (d=" << d << "): "
-                  << control.last_step() << " CG iters\n";
+        try {
+            cg.solve(matrix_A, sol_d, rhs_d, A_amg);
+        } catch (SolverControl::NoConvergence& e) {
+            std::cout << "  Pre-solve (d=" << d << "): FAILED at "
+                      << e.last_step << " iters, res=" << e.last_residual << "\n";
+        }
 
         for (unsigned int i = 0; i < n_scalar; ++i)
             z(d * n_scalar + i) = sol_d(i);
@@ -223,47 +177,7 @@ void DGNavierStokes::solve_schur(const Vector<double>& rhs_u,
     {
         SchurOperator schur_op(matrix_A, A_amg, matrix_B, matrix_Bt, n_scalar);
 
-        // Build element-local L_p^{-1} blocks
-        std::vector<FullMatrix<double>> lp_inv_blocks;
-        {
-            const unsigned int vel_dpc = fe_velocity_scalar.n_dofs_per_cell();
-            const unsigned int pres_dpc = fe_pressure.n_dofs_per_cell();
-            const QGauss<2> quad(Params::DG_ORDER + 1);
-            FEValues<2> vel_fe(mapping, fe_velocity_scalar, quad,
-                               update_gradients | update_JxW_values);
-            FEValues<2> pres_fe(mapping, fe_pressure, quad,
-                                update_values | update_JxW_values);
-
-            lp_inv_blocks.resize(triangulation.n_active_cells());
-            FullMatrix<double> local_B(vel_dpc, pres_dpc);
-            FullMatrix<double> MvinvB(vel_dpc, pres_dpc);
-            FullMatrix<double> local_Lp(pres_dpc, pres_dpc);
-
-            auto vel_cell = dof_handler_velocity.begin_active();
-            auto pres_cell = dof_handler_pressure.begin_active();
-            unsigned int idx = 0;
-            for (; vel_cell != dof_handler_velocity.end();
-                 ++vel_cell, ++pres_cell, ++idx) {
-                vel_fe.reinit(vel_cell);
-                pres_fe.reinit(pres_cell);
-                local_Lp = 0;
-
-                for (unsigned int dd = 0; dd < 2; ++dd) {
-                    local_B = 0;
-                    for (unsigned int q = 0; q < quad.size(); ++q)
-                        for (unsigned int i = 0; i < vel_dpc; ++i)
-                            for (unsigned int j = 0; j < pres_dpc; ++j)
-                                local_B(i, j) -= pres_fe.shape_value(j, q) *
-                                    vel_fe.shape_grad(i, q)[dd] * vel_fe.JxW(q);
-                    mv_inv_blocks[idx].mmult(MvinvB, local_B);
-                    local_B.Tmmult(local_Lp, MvinvB, true);
-                }
-
-                lp_inv_blocks[idx].reinit(pres_dpc, pres_dpc);
-                lp_inv_blocks[idx].invert(local_Lp);
-            }
-        }
-
+        // Use pre-built L_p^{-1} blocks (set up once in run())
         CahouetChabard precond(Params::NU, gamma_dt,
                                mp_inv_blocks, lp_inv_blocks,
                                dof_handler_pressure);
@@ -288,11 +202,14 @@ void DGNavierStokes::solve_schur(const Vector<double>& rhs_u,
             for (unsigned int i = 0; i < n_scalar; ++i)
                 rhs_d(i) = rhs_u(d * n_scalar + i) - Bp(d * n_scalar + i);
 
-            SolverControl control(200, 1e-8 * rhs_d.l2_norm());
+            SolverControl control(200, std::max(1e-8 * rhs_d.l2_norm(), 1e-14));
             SolverCG<Vector<double>> cg(control);
-            cg.solve(matrix_A, sol_d, rhs_d, A_amg);
-            std::cout << "  Back-solve (d=" << d << "): "
-                      << control.last_step() << " CG iters\n";
+            try {
+                cg.solve(matrix_A, sol_d, rhs_d, A_amg);
+            } catch (SolverControl::NoConvergence& e) {
+                std::cout << "  Back-solve (d=" << d << "): FAILED at "
+                          << e.last_step << " iters, res=" << e.last_residual << "\n";
+            }
 
             for (unsigned int i = 0; i < n_scalar; ++i)
                 sol_u(d * n_scalar + i) = sol_d(i);
