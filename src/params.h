@@ -43,9 +43,17 @@ constexpr int BID_WALLS        = 3;  ///< Top and bottom walls
 constexpr int BID_CYLINDER     = 4;  ///< Cylinder surface
 constexpr int BID_PRESSURE_PIN = 5;  ///< Single outlet-corner node; p=0 Dirichlet to fix null space
 
-// ── FEM discretisation ────────────────────────────────────────────────────────
-constexpr int VELOCITY_ORDER = 2;  ///< Taylor-Hood: P2 velocity
-constexpr int PRESSURE_ORDER = 1;  ///< Taylor-Hood: P1 pressure
+// ── FEM discretisation (DG) ───────────────────────────────────────────────────
+constexpr int DG_ORDER = 2;  ///< Polynomial order for all variables (equal-order DG)
+
+// ── DG stabilisation parameters ──────────────────────────────────────────────
+/// SIPG viscous penalty: sigma_v * nu / h_F on each face.
+/// Typical range: 4–10 * k^2 for triangles (Shahbazi et al. 2007).
+constexpr double SIGMA_V = 10.0 * DG_ORDER * DG_ORDER;
+
+/// Pressure-jump stabilisation: gamma_p * h_F * [[p]] * [[q]].
+/// Restores inf-sup stability for equal-order DG (Cockburn et al. 2007).
+constexpr double GAMMA_P = 0.05;
 
 // ── Nonlinear solver: PETSc SNES (Newton + backtracking line search) ──────────
 constexpr int    SNES_MAX_IT = 50;     ///< Maximum Newton iterations
@@ -60,8 +68,8 @@ constexpr double SNES_RTOL   = 1.0e-10;///< Relative nonlinear residual toleranc
 //   on the non-symmetric velocity block).
 // Lower-triangular Schur factorisation; selfp Schur approximation.
 // Linear tolerance set adaptively by libMesh's inexact-Newton framework.
-constexpr int    KSP_MAX_IT    = 200;    ///< Maximum Krylov iterations per Newton step
-constexpr int    GMRES_RESTART = 100;    ///< FGMRES restart parameter
+constexpr int    KSP_MAX_IT    = 500;    ///< Maximum Krylov iterations per Newton step
+constexpr int    GMRES_RESTART = 200;    ///< FGMRES restart parameter
 
 // ── Drag/lift normalisation ───────────────────────────────────────────────────
 ///   C_D = 2 F_D / (ρ U_MEAN² D),   C_L = 2 F_L / (ρ U_MEAN² D)

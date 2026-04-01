@@ -1,10 +1,10 @@
 /**
  * @file main.cpp
- * @brief Entry point for the time-dependent channel-flow solver.
+ * @brief Entry point for the time-dependent DG channel-flow solver.
  *
- * Initialises libMesh, loads the mesh, constructs ChannelFlowSystem with an
- * EulerSolver (backward Euler, theta=1) + NewtonSolver chain, and runs a
- * time-stepping loop from t=0 to T_FINAL.
+ * Initialises libMesh, loads the mesh, constructs ChannelFlowSystem with
+ * DG equal-order elements, EulerSolver (Crank-Nicolson) + NewtonSolver,
+ * and runs a time-stepping loop from t=0 to T_FINAL.
  *
  * Usage:
  *   channel_flow --mesh <path/to/mesh.msh> [--help]
@@ -75,8 +75,7 @@ int main(int argc, char** argv)
     // ── Load mesh ──────────────────────────────────────────────────────────
     libMesh::Mesh mesh(init.comm());
     mesh.read(mesh_path);
-    mesh.all_second_order();
-    ChannelFlowSystem::tag_pressure_pin(mesh);
+    // DG uses L2_LAGRANGE on TRI3 elements — no need for all_second_order().
     libMesh::out << "  Elements: " << mesh.n_elem()
                  << "  Nodes: " << mesh.n_nodes() << "\n";
 
@@ -115,13 +114,13 @@ int main(int argc, char** argv)
     PetscOptionsSetValue(NULL, "-ksp_max_it",
                          std::to_string(Params::KSP_MAX_IT).c_str());
 
-    // ── Velocity sub-PC: ILU(1) ─────────────────────────────────────────
-    // At Re=100 the advection Jacobian dominates M/dt even with dt=0.02,
-    // making the velocity block non-symmetric.  BoomerAMG fails (FGMRES
-    // hits 200 iterations).  ILU is robust for non-symmetric systems.
+    // ── Velocity sub-PC: ASM with ILU(2) ────────────────────────────────
+    // DG stiffness has wider stencil from face coupling; use additive
+    // Schwarz with ILU(2) on each subdomain.
     PetscOptionsSetValue(NULL, "-fieldsplit_velocity_ksp_type",         "preonly");
-    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_pc_type",          "ilu");
-    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_pc_factor_levels", "1");
+    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_pc_type",          "asm");
+    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_sub_pc_type",      "ilu");
+    PetscOptionsSetValue(NULL, "-fieldsplit_velocity_sub_pc_factor_levels", "2");
 
     // ── Pressure sub-PC: BoomerAMG ───────────────────────────────────────
     // Laplacian-like Schur complement Sp: strong threshold 0.7.
@@ -131,6 +130,7 @@ int main(int argc, char** argv)
     PetscOptionsSetValue(NULL, "-fieldsplit_pressure_pc_hypre_boomeramg_strong_threshold", "0.7");
 
     ChannelFlowSystem::configure_fieldsplit(sys, mesh, ns);
+    ChannelFlowSystem::setup_pressure_null_space(sys, mesh, ns);
 
     // ── Prepare output ────────────────────────────────────────────────────
     (void)mkdir("results", 0755);
@@ -146,14 +146,8 @@ int main(int argc, char** argv)
     for (double t = Params::DT; t <= Params::T_FINAL + 0.5 * Params::DT;
          t += Params::DT, ++step)
     {
-        // Set system time so Dirichlet BCs evaluate the ramp at t_new.
+        // Set system time so weak BCs evaluate the ramp at t_new.
         sys.time = t;
-
-        // Rebuild Dirichlet constraint values at the new time so that
-        // enforce_constraints_exactly applies ramp(t)*profile, not ramp(0).
-        sys.get_dof_map().create_dof_constraints(mesh, t);
-        sys.get_dof_map().enforce_constraints_exactly(sys);
-        sys.update();
 
         libMesh::out << "\n=== Time step " << step + 1
                      << "  t = " << t << " ===\n";

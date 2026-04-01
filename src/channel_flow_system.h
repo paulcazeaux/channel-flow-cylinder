@@ -1,26 +1,20 @@
 #pragma once
 /**
  * @file channel_flow_system.h
- * @brief FEMSystem subclass for 2D incompressible Navier-Stokes
- *        on the Schafer-Turek channel-cylinder domain (DFG 2D-1/2D-2).
+ * @brief FEMSystem subclass for 2D incompressible Navier-Stokes using DG.
  *
- * Variables:
- *   u, v  — velocity components, P2 Lagrange (SECOND order)
- *   p     — pressure, P1 Lagrange (FIRST order)
+ * Variables (all discontinuous, equal-order P_k):
+ *   u, v  — velocity components, L2_LAGRANGE order DG_ORDER
+ *   p     — pressure, L2_LAGRANGE order DG_ORDER
  *
- * Weak form (time-dependent):
- *   Momentum:   ∫ρ ∂u/∂t·w dx + ν∫∇u·∇w dx + ∫(u·∇)u·w dx − ∫p∇·w dx = 0
- *   Continuity: ∫q∇·u dx = 0
- *
- * Boundary conditions:
- *   Inlet   (BID 1): parabolic u = 4·U_MAX·y·(H−y)/H², v = 0
- *   Outlet  (BID 2): stress-free do-nothing (natural Neumann)
- *   Walls   (BID 3): no-slip u = v = 0
- *   Cylinder(BID 4): no-slip u = v = 0
+ * Weak form (DG with SIPG viscous flux + upwind advection):
+ *   Volume:   standard Galerkin integrals (same as CG)
+ *   Faces:    SIPG penalty, pressure coupling, Lax-Friedrichs advection
+ *   BCs:      weakly enforced via boundary face fluxes
+ *   Pressure: equal-order stabilised with pressure-jump penalty
  */
 
 #include "libmesh/fem_system.h"
-#include "libmesh/function_base.h"
 #include "libmesh/mesh_base.h"
 #include "libmesh/newton_solver.h"
 
@@ -29,124 +23,81 @@
 
 /**
  * @class ChannelFlowSystem
- * @brief Incompressible Navier-Stokes via Taylor-Hood P2/P1 elements.
- *
- * Supports both steady (SteadySolver) and time-dependent (EulerSolver)
- * operation.  For time-dependent mode, mass_residual() provides the
- * ∫ρ ∂u/∂t · w dx term.
+ * @brief Incompressible Navier-Stokes via DG equal-order elements.
  */
 class ChannelFlowSystem : public libMesh::FEMSystem
 {
 public:
-    /**
-     * @brief Construct and register with an EquationSystems instance.
-     * @param es     Parent equation systems object.
-     * @param name   System name used by libMesh.
-     * @param number Unique system index assigned by libMesh.
-     */
     ChannelFlowSystem(libMesh::EquationSystems& es,
                       const std::string& name,
                       unsigned int number);
 
-    /**
-     * @brief Add u, v (P2) and p (P1) variables; register Dirichlet BCs.
-     *        Must be called before es.init().
-     */
+    /** @brief Add u, v, p as L2_LAGRANGE variables; enable internal sides. */
     void init_data() override;
 
-    /**
-     * @brief Request the FE data (JxW, phi, dphi) that element assembly needs.
-     *        Called once per element before element_time_derivative /
-     *        element_constraint.
-     */
+    /** @brief Request FE data for element and side assembly. */
     void init_context(libMesh::DiffContext& ctx) override;
 
-    /**
-     * @brief Assemble the element momentum residual (and Jacobian if requested).
-     *
-     * Contributes ν∫∇u·∇w + (u·∇)u·w − p∇·w to the element residual.
-     * Newton Jacobian is assembled when @p request_jacobian is true.
-     *
-     * @return Whether the Jacobian was assembled.
-     */
+    /** @brief Build a DGFEMContext instead of the default FEMContext. */
+    std::unique_ptr<libMesh::DiffContext> build_context() override;
+
+    // ── Volume integrals (element interior) ──────────────────────────────────
+
+    /** @brief Momentum residual: viscous + advection + pressure gradient. */
     bool element_time_derivative(bool request_jacobian,
                                  libMesh::DiffContext& ctx) override;
 
-    /**
-     * @brief Assemble the element continuity residual (and Jacobian if requested).
-     *
-     * Contributes −∫q∇·u dx to the element residual.
-     *
-     * @return Whether the Jacobian was assembled.
-     */
+    /** @brief Continuity residual: -div(u). */
     bool element_constraint(bool request_jacobian,
                             libMesh::DiffContext& ctx) override;
 
-    /**
-     * @brief Assemble the mass matrix residual for time-dependent solves.
-     *
-     * Contributes ∫ρ u̇·w dx for velocity variables only (no time derivative
-     * in the continuity equation).  Called by libMesh's UnsteadySolver.
-     *
-     * @return Whether the Jacobian was assembled.
-     */
+    /** @brief Mass residual for time-dependent solves. */
     bool mass_residual(bool request_jacobian,
                        libMesh::DiffContext& ctx) override;
 
-    /// Variable index for x-velocity (set during init_data).
+    // ── Face integrals (DG fluxes) ───────────────────────────────────────────
+
+    /** @brief Side momentum fluxes: SIPG, upwind advection, pressure, weak BCs. */
+    bool side_time_derivative(bool request_jacobian,
+                              libMesh::DiffContext& ctx) override;
+
+    /** @brief Side continuity fluxes: velocity divergence coupling + pressure jump. */
+    bool side_constraint(bool request_jacobian,
+                         libMesh::DiffContext& ctx) override;
+
+    // ── Accessors ────────────────────────────────────────────────────────────
+
     unsigned int u_var() const { return _u_var; }
-    /// Variable index for y-velocity (set during init_data).
     unsigned int v_var() const { return _v_var; }
-    /// Variable index for pressure (set during init_data).
     unsigned int p_var() const { return _p_var; }
 
     /**
-     * @brief Tag the outlet-corner node with BID_PRESSURE_PIN so that
-     *        init_data() can apply a p=0 Dirichlet condition there.
+     * @brief Configure PETSc fieldsplit preconditioner for DG DOFs.
      *
-     * Must be called after mesh.all_second_order() and before
-     * EquationSystems::init().  Removes the pressure null space of the
-     * incompressible Stokes/NS system, which otherwise causes iterative
-     * solvers to stall on the full saddle-point matrix.
-     *
-     * @param mesh The mesh to annotate (modified in place).
-     */
-    static void tag_pressure_pin(libMesh::MeshBase& mesh);
-
-    /**
-     * @brief Configure PETSc fieldsplit preconditioner on the Newton solver's KSP.
-     *
-     * Must be called after EquationSystems::init() and before the first solve().
-     * Partitions DOFs into velocity (u,v) and pressure (p) index sets, sets
-     * pc_type=fieldsplit with Schur factorisation, and assigns BoomerAMG to the
-     * velocity sub-PC.  Sub-PC options must be set via PetscOptionsSetValue before
-     * this call.
-     *
-     * @param sys    Initialised ChannelFlowSystem (variable indices + DofMap).
-     * @param mesh   The mesh (iterated for DOF collection).
-     * @param newton Newton solver owning the KSP to configure.
+     * DG DOFs are element-local (no sharing); collects velocity and pressure
+     * index sets by iterating over elements.
      */
     static void configure_fieldsplit(ChannelFlowSystem& sys,
                                      libMesh::MeshBase& mesh,
                                      libMesh::NewtonSolver& newton);
 
     /**
-     * @brief Enable or disable Stokes (linear) mode.
+     * @brief Set up PETSc MatNullSpace for pressure constant mode.
      *
-     * When true, advection terms (u·∇)u are suppressed in assembly, reducing
-     * Navier-Stokes to the linear Stokes problem.  Newton converges in exactly
-     * one iteration, providing a cheap initial guess for the full NS solve.
+     * Must be called after the first assembly so the matrix exists.
+     * Projects out the constant pressure mode to remove the null space.
      */
+    static void setup_pressure_null_space(ChannelFlowSystem& sys,
+                                          libMesh::MeshBase& mesh,
+                                          libMesh::NewtonSolver& newton);
+
     void set_stokes_mode(bool stokes) { _stokes_mode = stokes; }
     bool stokes_mode() const { return _stokes_mode; }
 
 private:
-    unsigned int _u_var; ///< P2 x-velocity variable index
-    unsigned int _v_var; ///< P2 y-velocity variable index
-    unsigned int _p_var; ///< P1 pressure variable index
+    unsigned int _u_var;
+    unsigned int _v_var;
+    unsigned int _p_var;
 
-    bool _stokes_mode = false; ///< Suppress advection for Stokes initialisation
-
-    /// Owned parabolic inlet profile; kept alive for DirichletBoundary lifetime.
-    std::unique_ptr<libMesh::FunctionBase<libMesh::Number>> _inlet_u_func;
+    bool _stokes_mode = false;
 };

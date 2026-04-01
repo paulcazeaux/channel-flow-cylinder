@@ -1,10 +1,9 @@
 /**
  * @file channel_flow_assembly.cpp
- * @brief Element-level weak-form assembly for ChannelFlowSystem.
+ * @brief Volume (element-interior) weak-form assembly for DG Navier-Stokes.
  *
- * Implements the Taylor-Hood P2/P1 Galerkin form for incompressible
- * Navier-Stokes, including the mass matrix for time-dependent solves.
- * Variable setup and Dirichlet BCs are in channel_flow_system.cpp.
+ * Volume integrals are identical to the CG formulation — the DG face terms
+ * (SIPG, upwind, pressure coupling) are assembled in dg_face_assembly.cpp.
  */
 
 #include "channel_flow_system.h"

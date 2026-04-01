@@ -1,106 +1,30 @@
 /**
  * @file channel_flow_system.cpp
- * @brief ChannelFlowSystem: variable setup, Dirichlet BCs, and mesh utilities.
+ * @brief ChannelFlowSystem: DG variable setup, context building, fieldsplit.
  *
- * Weak-form assembly is in channel_flow_assembly.cpp.
+ * Weak-form volume assembly is in channel_flow_assembly.cpp.
+ * DG face assembly is in dg_face_assembly.cpp.
  */
 
 #include "channel_flow_system.h"
 #include "params.h"
 
 #include "libmesh/dof_map.h"
-#include "libmesh/dirichlet_boundaries.h"
-#include "libmesh/zero_function.h"
 #include "libmesh/fe_base.h"
-#include "libmesh/fem_context.h"
-#include "libmesh/point.h"
+#include "libmesh/dg_fem_context.h"
 #include "libmesh/dense_vector.h"
-#include "libmesh/libmesh_common.h"
 #include "libmesh/boundary_info.h"
-#include "libmesh/node.h"
+#include "libmesh/elem.h"
 #include "libmesh/petsc_linear_solver.h"
+#include "libmesh/sparse_matrix.h"
 
 #include <petscpc.h>
 #include <petscis.h>
+#include <petscmat.h>
 
 #include <algorithm>
-#include <cmath>
 #include <limits>
-#include <set>
 #include <vector>
-
-// ── Inlet velocity function ───────────────────────────────────────────────────
-
-namespace {
-
-/**
- * @brief Time-dependent parabolic inlet u-velocity with smooth ramp-up.
- *
- * u(y,t) = 4·U_MAX·y·(H−y)/H² · r(t)
- *
- * where r(t) = sin²(π·t / (2·T_RAMP)) for t < T_RAMP, and r(t) = 1 after.
- * This smooth ramp avoids impulsive startup and produces a visible transient
- * as eddies develop behind the cylinder.
- */
-class InletVelocityU : public libMesh::FunctionBase<libMesh::Number>
-{
-public:
-    std::unique_ptr<libMesh::FunctionBase<libMesh::Number>>
-    clone() const override
-    {
-        return std::make_unique<InletVelocityU>();
-    }
-
-    libMesh::Number operator()(const libMesh::Point& p,
-                               const libMesh::Real t = 0.0) override
-    {
-        const double y = p(1);
-        const double profile = 4.0 * Params::U_MAX * y
-                               * (Params::CHANNEL_HEIGHT - y)
-                               / (Params::CHANNEL_HEIGHT * Params::CHANNEL_HEIGHT);
-
-        // Smooth ramp: sin²(πt/(2·T_RAMP))
-        double ramp = 1.0;
-        if (t < Params::T_RAMP) {
-            const double s = std::sin(M_PI * t / (2.0 * Params::T_RAMP));
-            ramp = s * s;
-        }
-        return profile * ramp;
-    }
-
-    void operator()(const libMesh::Point& p,
-                    const libMesh::Real t,
-                    libMesh::DenseVector<libMesh::Number>& output) override
-    {
-        output.resize(1);
-        output(0) = (*this)(p, t);
-    }
-};
-
-} // anonymous namespace
-
-// ── Static helpers ────────────────────────────────────────────────────────────
-
-void ChannelFlowSystem::tag_pressure_pin(libMesh::MeshBase& mesh)
-{
-    // Find the local node nearest to the outlet-bottom corner (CHANNEL_LENGTH, 0).
-    // That node is tagged BID_PRESSURE_PIN so init_data() can add p=0 Dirichlet
-    // there, removing the pressure null space for iterative solvers.
-    libMesh::Node* pin_node = nullptr;
-    double min_dist2 = std::numeric_limits<double>::max();
-    for (auto& node : mesh.local_node_ptr_range()) {
-        const double dx = (*node)(0) - Params::CHANNEL_LENGTH;
-        const double dy = (*node)(1);
-        if (dx * dx + dy * dy < min_dist2) {
-            min_dist2 = dx * dx + dy * dy;
-            pin_node  = node;
-        }
-    }
-    libmesh_assert_msg(pin_node, "tag_pressure_pin: no local nodes found");
-    mesh.get_boundary_info().add_node(
-        pin_node,
-        static_cast<libMesh::boundary_id_type>(Params::BID_PRESSURE_PIN));
-}
 
 // ── ChannelFlowSystem ─────────────────────────────────────────────────────────
 
@@ -113,102 +37,107 @@ ChannelFlowSystem::ChannelFlowSystem(libMesh::EquationSystems& es,
 
 void ChannelFlowSystem::init_data()
 {
-    // ── Add Taylor-Hood variables ─────────────────────────────────────────────
-    _u_var = this->add_variable("u", libMesh::SECOND, libMesh::LAGRANGE);
-    _v_var = this->add_variable("v", libMesh::SECOND, libMesh::LAGRANGE);
-    _p_var = this->add_variable("p", libMesh::FIRST,  libMesh::LAGRANGE);
+    // ── Add DG variables (equal-order L2_LAGRANGE) ───────────────────────────
+    const auto order = static_cast<libMesh::Order>(Params::DG_ORDER);
+    _u_var = this->add_variable("u", order, libMesh::L2_LAGRANGE);
+    _v_var = this->add_variable("v", order, libMesh::L2_LAGRANGE);
+    _p_var = this->add_variable("p", order, libMesh::L2_LAGRANGE);
 
-    // ── Dirichlet BCs ─────────────────────────────────────────────────────────
+    // No Dirichlet BCs — DG enforces BCs weakly through face fluxes.
 
-    // No-slip: top/bottom walls and cylinder surface
-    {
-        const std::set<libMesh::boundary_id_type> ids = {
-            static_cast<libMesh::boundary_id_type>(Params::BID_WALLS),
-            static_cast<libMesh::boundary_id_type>(Params::BID_CYLINDER)
-        };
-        const std::vector<unsigned int> vel_vars = {_u_var, _v_var};
-        libMesh::ZeroFunction<libMesh::Number> zero;
-        this->get_dof_map().add_dirichlet_boundary(
-            libMesh::DirichletBoundary(ids, vel_vars, &zero));
-    }
+    // Enable internal-side assembly for DG face integrals.
+    this->compute_internal_sides = true;
 
-    // Inlet u-velocity: parabolic profile
-    {
-        const std::set<libMesh::boundary_id_type> ids = {
-            static_cast<libMesh::boundary_id_type>(Params::BID_INLET)
-        };
-        InletVelocityU inlet_u;
-        this->get_dof_map().add_dirichlet_boundary(
-            libMesh::DirichletBoundary(ids, {_u_var}, &inlet_u));
-    }
+    // Mark velocity variables as time-evolving (pressure is algebraic).
+    this->time_evolving(_u_var, 1);
+    this->time_evolving(_v_var, 1);
 
-    // Inlet v-velocity: zero
-    {
-        const std::set<libMesh::boundary_id_type> ids = {
-            static_cast<libMesh::boundary_id_type>(Params::BID_INLET)
-        };
-        libMesh::ZeroFunction<libMesh::Number> zero;
-        this->get_dof_map().add_dirichlet_boundary(
-            libMesh::DirichletBoundary(ids, {_v_var}, &zero));
-    }
-
-    // Outlet (BID_OUTLET): natural Neumann — no action needed.
-
-    // Pressure pin: p=0 at BID_PRESSURE_PIN (outlet corner).
-    // Fixes the pressure null space so iterative solvers can converge on the
-    // saddle-point system.  Physically valid: incompressible pressure is only
-    // determined up to a constant; pinning one node sets the reference level.
-    {
-        const std::set<libMesh::boundary_id_type> ids = {
-            static_cast<libMesh::boundary_id_type>(Params::BID_PRESSURE_PIN)
-        };
-        libMesh::ZeroFunction<libMesh::Number> zero;
-        this->get_dof_map().add_dirichlet_boundary(
-            libMesh::DirichletBoundary(ids, {_p_var}, &zero));
-    }
-
-    // ── Delegate to parent to finalize variable/DOF setup ─────────────────────
     this->FEMSystem::init_data();
 }
+
+std::unique_ptr<libMesh::DiffContext> ChannelFlowSystem::build_context()
+{
+    return std::make_unique<libMesh::DGFEMContext>(*this);
+}
+
+void ChannelFlowSystem::init_context(libMesh::DiffContext& ctx)
+{
+    auto& c = libMesh::cast_ref<libMesh::FEMContext&>(ctx);
+
+    // ── Element interior FE data ─────────────────────────────────────────────
+    libMesh::FEBase* u_elem_fe = nullptr;
+    libMesh::FEBase* p_elem_fe = nullptr;
+    c.get_element_fe(_u_var, u_elem_fe);
+    c.get_element_fe(_p_var, p_elem_fe);
+
+    u_elem_fe->get_JxW();
+    u_elem_fe->get_phi();
+    u_elem_fe->get_dphi();
+    p_elem_fe->get_phi();
+    p_elem_fe->get_dphi();
+
+    // ── Side FE data (current element side) ──────────────────────────────────
+    libMesh::FEBase* u_side_fe = nullptr;
+    libMesh::FEBase* p_side_fe = nullptr;
+    c.get_side_fe(_u_var, u_side_fe);
+    c.get_side_fe(_p_var, p_side_fe);
+
+    u_side_fe->get_JxW();
+    u_side_fe->get_phi();
+    u_side_fe->get_dphi();
+    u_side_fe->get_normals();
+    u_side_fe->get_xyz();  // needed for BC evaluation at quadrature points
+    p_side_fe->get_phi();
+    p_side_fe->get_dphi();
+
+    // ── Neighbor side FE data (for DG internal faces) ────────────────────────
+    auto& dg_c = libMesh::cast_ref<libMesh::DGFEMContext&>(ctx);
+    libMesh::FEBase* u_neigh_fe = nullptr;
+    libMesh::FEBase* p_neigh_fe = nullptr;
+    dg_c.get_neighbor_side_fe(_u_var, u_neigh_fe);
+    dg_c.get_neighbor_side_fe(_p_var, p_neigh_fe);
+
+    u_neigh_fe->get_phi();
+    u_neigh_fe->get_dphi();
+    p_neigh_fe->get_phi();
+    p_neigh_fe->get_dphi();
+}
+
+// ── Fieldsplit preconditioner for DG DOFs ─────────────────────────────────────
 
 void ChannelFlowSystem::configure_fieldsplit(ChannelFlowSystem& sys,
                                               libMesh::MeshBase& mesh,
                                               libMesh::NewtonSolver& newton)
 {
-    // Ensure the linear solver is created (reinit allocates _linear_solver).
     newton.reinit();
 
-    // Obtain the PETSc KSP handle from libMesh's linear solver.
     auto& ls = libMesh::cast_ref<
         libMesh::PetscLinearSolver<libMesh::Number>&>(newton.get_linear_solver());
-    KSP ksp = ls.ksp();   // calls ls.init() internally if needed
+    KSP ksp = ls.ksp();
 
     PC pc;
     KSPGetPC(ksp, &pc);
 
-    // ── Collect velocity and pressure DOF indices ─────────────────────────────
+    // ── Collect velocity and pressure DOF indices (element-local, no sharing) ─
     const libMesh::DofMap& dof_map = sys.get_dof_map();
     std::vector<libMesh::dof_id_type> dofs;
     std::vector<PetscInt> vel_ids, p_ids;
 
-    for (const auto* node : mesh.local_node_ptr_range()) {
-        dof_map.dof_indices(node, dofs, sys.u_var());
+    for (const auto* elem : mesh.active_local_element_ptr_range()) {
+        dof_map.dof_indices(elem, dofs, sys.u_var());
         for (auto d : dofs) vel_ids.push_back(static_cast<PetscInt>(d));
 
-        dof_map.dof_indices(node, dofs, sys.v_var());
+        dof_map.dof_indices(elem, dofs, sys.v_var());
         for (auto d : dofs) vel_ids.push_back(static_cast<PetscInt>(d));
 
-        dof_map.dof_indices(node, dofs, sys.p_var());
+        dof_map.dof_indices(elem, dofs, sys.p_var());
         for (auto d : dofs) p_ids.push_back(static_cast<PetscInt>(d));
     }
 
-    // Sort and deduplicate (P2 nodes are shared between elements).
+    // DG DOFs are element-local — no deduplication needed, but sort for PETSc.
     std::sort(vel_ids.begin(), vel_ids.end());
-    vel_ids.erase(std::unique(vel_ids.begin(), vel_ids.end()), vel_ids.end());
     std::sort(p_ids.begin(), p_ids.end());
-    p_ids.erase(std::unique(p_ids.begin(), p_ids.end()), p_ids.end());
 
-    // ── Create PETSc index sets and configure fieldsplit ──────────────────────
     IS vel_is, p_is;
     ISCreateGeneral(PETSC_COMM_WORLD,
                     static_cast<PetscInt>(vel_ids.size()), vel_ids.data(),
@@ -220,14 +149,10 @@ void ChannelFlowSystem::configure_fieldsplit(ChannelFlowSystem& sys,
     PCSetType(pc, PCFIELDSPLIT);
     PCFieldSplitSetType(pc, PC_COMPOSITE_SCHUR);
     PCFieldSplitSetSchurFactType(pc, PC_FIELDSPLIT_SCHUR_FACT_LOWER);
-    // Sp = A10 * Diag(A00)^{-1} * A01: assembled Schur approximation (selfp).
-    // LOWER factorisation captures velocity-pressure coupling; 35 iters on the
-    // 6k-DOF coarse mesh (vs 176 for DIAG).
     PCFieldSplitSetSchurPre(pc, PC_FIELDSPLIT_SCHUR_PRE_SELFP, NULL);
     PCFieldSplitSetIS(pc, "velocity", vel_is);
     PCFieldSplitSetIS(pc, "pressure", p_is);
 
-    // The PC retains its own reference; safe to release ours.
     ISDestroy(&vel_is);
     ISDestroy(&p_is);
 
@@ -235,19 +160,38 @@ void ChannelFlowSystem::configure_fieldsplit(ChannelFlowSystem& sys,
                  << "  pressure DOFs: " << p_ids.size() << "\n";
 }
 
-void ChannelFlowSystem::init_context(libMesh::DiffContext& ctx)
+void ChannelFlowSystem::setup_pressure_null_space(ChannelFlowSystem& sys,
+                                                   libMesh::MeshBase& mesh,
+                                                   libMesh::NewtonSolver& /* newton */)
 {
-    libMesh::FEMContext& c = libMesh::cast_ref<libMesh::FEMContext&>(ctx);
+    // With DG and no Dirichlet BCs on pressure, the system has a constant
+    // pressure null space.  Pin the first local pressure DOF of the first
+    // element near the outlet to p=0 via a Dirichlet constraint.
+    const libMesh::DofMap& dof_map = sys.get_dof_map();
 
-    libMesh::FEBase* u_fe = nullptr;
-    libMesh::FEBase* p_fe = nullptr;
-    c.get_element_fe(_u_var, u_fe);
-    c.get_element_fe(_p_var, p_fe);
+    // Find the element nearest the outlet-bottom corner
+    const libMesh::Elem* pin_elem = nullptr;
+    double min_dist2 = std::numeric_limits<double>::max();
+    for (const auto* elem : mesh.active_local_element_ptr_range()) {
+        const auto centroid = elem->vertex_average();
+        const double dx = centroid(0) - Params::CHANNEL_LENGTH;
+        const double dy = centroid(1);
+        const double d2 = dx * dx + dy * dy;
+        if (d2 < min_dist2) {
+            min_dist2 = d2;
+            pin_elem = elem;
+        }
+    }
 
-    // Request the data arrays actually used in element assembly.
-    u_fe->get_JxW();
-    u_fe->get_phi();
-    u_fe->get_dphi();
-    p_fe->get_phi();
-    // p_fe dphi not needed (continuity uses velocity shape gradients only).
+    if (pin_elem) {
+        std::vector<libMesh::dof_id_type> p_dofs;
+        dof_map.dof_indices(pin_elem, p_dofs, sys.p_var());
+        if (!p_dofs.empty()) {
+            // Constrain the first pressure DOF of this element to zero
+            libMesh::DofConstraintRow empty_row;
+            sys.get_dof_map().add_constraint_row(p_dofs[0], empty_row, 0.0, true);
+            libMesh::out << "[setup_pressure_null_space] Pinned pressure DOF "
+                         << p_dofs[0] << " to zero.\n";
+        }
+    }
 }

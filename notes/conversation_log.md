@@ -1140,3 +1140,207 @@ Output: results/channel_flow.mp4 (559 KB, 5.4s).
 ### Status
 Vortex shedding branch complete. Simulation validated against
 Schafer-Turek 2D-2 benchmark. Movie produced.
+
+---
+
+## Session 17 — 2026-03-31
+
+### Topics
+DG Navier-Stokes: formulation choice, libMesh DG attempt, switch to deal.II.
+
+### Decisions and rationale
+
+1. **DG formulation chosen: SIPG + Lax-Friedrichs + equal-order P_k/P_k**
+   - SIPG (Symmetric Interior Penalty) for viscous terms — simplest DG diffusion form
+   - Lax-Friedrichs upwind flux for advection — smooth Jacobian, robust for all Re
+   - Equal-order with pressure-jump stabilization (Shahbazi/Cockburn 2007)
+   - Starting at P2/P2, can raise order by changing one parameter
+
+2. **libMesh's FEMSystem does NOT support DG assembly**
+   - `DGFEMContext` provides data structures (neighbor shape functions,
+     4-block Jacobians) but `FEMSystem::assembly()` never calls
+     `neighbor_side_fe_reinit()` — verified experimentally:
+     `dg_terms_are_active()` is always false unless manually called
+   - Even after manual `neighbor_side_fe_reinit()`, the neighbor residual
+     and DG Jacobian blocks are NOT scattered into the global system
+   - LU direct solve gives `residual inf` — confirming the matrix is
+     structurally singular (only volume terms assembled, no face coupling)
+   - **Root cause**: FEMSystem was designed for CG; DGFEMContext is for
+     user-level DG but requires a custom assembly loop
+
+3. **Switch to deal.II for DG implementation**
+   - deal.II has first-class DG support: `MeshWorker::mesh_loop()` with
+     automatic `cell_worker`, `face_worker`, `boundary_worker` callbacks
+   - `FEFaceValues` handles neighbor side quadrature naturally
+   - PETSc backend via `PETScWrappers` (reuse existing PETSc install)
+   - Installing deal.II 9.7.1 via spack with minimal dependencies
+
+### Files created/modified
+- `src/dg_face_assembly.cpp` — new: DG face integrals (SIPG, upwind, pressure)
+  Written and debugged, but unusable due to FEMSystem limitation
+- `src/channel_flow_system.h/.cpp` — modified for DG (L2_LAGRANGE, build_context,
+  compute_internal_sides, fieldsplit for element-local DOFs)
+- `src/channel_flow_assembly.cpp` — minimal changes (volume integrals identical)
+- `src/params.h` — added DG_ORDER, SIGMA_V, GAMMA_P; increased KSP_MAX_IT
+- `src/main.cpp` — removed all_second_order, tag_pressure_pin, constraint updates
+- `tests/test_dg_spaces.cpp` — new: DG space verification (PASSES)
+- `tests/test_dg_stokes.cpp` — new: DG Stokes solve (FAILS: singular matrix)
+- `PLAN.md` — updated for deal.II approach
+
+### Next steps
+1. Wait for deal.II spack install to complete
+2. Set up deal.II build infrastructure (CMakeLists.txt)
+3. Implement DG solver using deal.II's MeshWorker::mesh_loop()
+4. Validate against Schafer-Turek benchmarks
+
+---
+
+## Session 18 — 2026-03-31
+
+### Topics
+deal.II installation, IMEX time integration, Schur complement solver design,
+Phase 1 implementation (mesh + DOFs + sparsity + mass inverses).
+
+### Decisions and rationale
+
+1. **deal.II 9.7.1 installed via spack**
+   - Spec: `+petsc +mpi -threads` (TBB incompatible with GCC 11.5)
+   - First build failed on TBB hash<pair> error; disabled threads to fix
+   - 43 minutes to build
+
+2. **IMEX time integration (explicit advection, implicit Stokes)**
+   - Velocity block A = M_V/dt + θνK_DG becomes SPD (no advection)
+   - AMG is optimal for SPD operators → no ILU fallback needed
+   - A is constant across all stages and time steps → AMG setup once
+   - No Newton iterations needed (system is linear at each stage)
+   - IMEX-ARK3 (Kennedy & Carpenter 2003): 3rd order, 4 stages, CFL ≈ 1.7
+   - dt ≈ 0.011 s (vs 0.02 fully implicit); 4× more steps but each ~6× cheaper
+
+3. **Pressure Schur complement solver with Cahouet-Chabard preconditioner**
+   - Explicitly solve S = C - B^T A^{-1} B via nested Krylov
+   - Preconditioner: P_CC = ν·M_p^{-1} + (1/dt)·L_p^{-1}
+   - DG advantage: M_V^{-1} and M_p^{-1} are exact (block-diagonal)
+   - L_p = B^T M_V^{-1} B assembled explicitly (cheap with DG mass inverse)
+   - L_p^{-1} via 2 AMG V-cycles; A^{-1} via AMG (both SPD)
+
+4. **Quad mesh via GridGenerator::channel_with_cylinder**
+   - deal.II's FE_DGQ requires quads; our Gmsh mesh was triangles
+   - Built-in generator produces exact Schafer-Turek geometry with manifolds
+   - Boundary IDs: 0=inlet, 1=outlet, 2=cylinder, 3=walls
+   - MappingQ(2) for curved cells near cylinder
+
+5. **Separate DoFHandlers for velocity and pressure**
+   - Enables clean block assembly (A, B, C as separate matrices)
+   - Velocity: 2 scalar DoFHandlers (u, v share same FE_DGQ)
+   - Natural for Schur complement decomposition
+
+### Files created/modified
+- `src/dealii/dg_params.h` — centralized parameters (deal.II boundary IDs)
+- `src/dealii/dg_navier_stokes.h` — solver class declaration
+- `src/dealii/dg_navier_stokes.cc` — Phase 1: mesh, DOFs, sparsity, mass inverses
+- `src/dealii/main.cc` — entry point
+- `src/dealii/CMakeLists.txt` — build with deal.II (cmake + deal_ii_setup_target)
+- `PLAN.md` — updated with IMEX-ARK3 + Schur complement approach
+- `notes/solver_notes.md` — detailed IMEX and Cahouet-Chabard analysis
+- `notes/conversation_log.md` — this entry
+
+### Phase 1 results
+- 432 cells (1 global refinement), 11,664 total DOFs
+- 9 DOFs/cell/component (Q2 on quads)
+- 432 element-local mass inverse blocks (9×9) computed
+- VTK output verified
+
+### Phase 2 results
+All block matrices assembled (4.2s total on 432-cell mesh):
+- A = M_V + γ·dt·νK_DG: SIPG via MeshWorker::mesh_loop (cell + face + boundary)
+- B, B^T: pressure gradient/divergence (volume terms)
+- C: pressure-jump stabilization (face integrals via FEInterfaceValues)
+- L_p = B^T M_V^{-1} B: element-local assembly using pre-computed M_V^{-1}
+- M_V, M_p: mass matrices
+
+Key fixes during Phase 2:
+- SparsityPattern for B^T must be stored as class member (ObserverPointer)
+- boundary_worker for A uses direct matrix.add() (not CopyData) to avoid
+  conflicting with cell_worker CopyData
+- FEInterfaceValues handles jump/average operators for SIPG automatically
+
+### Schur complement solver (Phase 5, partial)
+- SchurOperator: matrix-free S = C - B^T A^{-1} B via nested CG+ILU
+- CahouetChabard: P_CC = ν M_p^{-1} + (1/dt_eff) L_p^{-1}
+  - M_p^{-1}: exact element-local (DG block-diagonal)
+  - L_p^{-1}: ILU on DG SIPG Laplacian (replaces volume-only B^T M_V^{-1} B
+    which was block-diagonal and singular)
+- Pre-solve converges in 1 CG iteration (velocity RHS very small)
+- GMRES on Schur complement diverges — needs debugging:
+  - RHS formulation may be incomplete (missing mass term contribution)
+  - L_p boundary conditions (Dirichlet penalty on non-outlet) may be wrong
+    for the pressure preconditioner
+  - Schur complement operator signs need verification
+
+### Solver debugging (continued in session)
+
+Systematic audit identified 4 bugs:
+1. ✅ B only had x-component — fixed: B is now (2·n_scalar) × n_pres
+2. ✅ B missing face integrals — fixed: added ∫_F {p}[[w·n]] for interior + boundary
+3. S null space — pinned DOF 0 in Schur operator (identity row)
+4. ✅ Sign: negated S so -S is PSD, matching the PD preconditioner
+
+Convergence status after fixes:
+- Unpreconditioned FGMRES: 0.114 → 0.022 in 100 iters (slowly converging)
+- With Cahouet-Chabard: 0.114 → 0.108 in 100 iters (preconditioner ineffective)
+- The operator is correct (unpreconditioned converges), but the preconditioner
+  is not spectrally equivalent to the Schur complement
+
+Root cause analysis for poor preconditioning:
+- dt_eff = γ·dt = 0.004359 → dt_inv = 229, so L_p^{-1} dominates P_CC
+- The L_p assembled is a SIPG Laplacian, which may not be spectrally
+  equivalent to the actual -S = B^T A^{-1} B - C
+- The inner CG solve for L_p^{-1} may need more iterations or better preconditioner
+- Need to verify eigenvalue distribution of P_CC^{-1} (-S)
+
+### Bugs found and fixed (continued)
+1. **Face accumulation**: `face_matrices.resize(1)` → `emplace_back()`.
+   Only last interior face per cell was assembled. Root cause of A singularity.
+2. **Double ν in penalty**: `σν²/h` → `σν/h`.
+3. **RHS sign**: `+∂w/∂n · u_bc` → `-∂w/∂n · u_bc`.
+4. **Spurious pressure RHS**: strong-form B has no boundary continuity terms.
+5. **Q_k/Q_k checkerboard**: interior pressure DOFs invisible to div and face
+   stabilization. Fix: Q2/Q1 (DG Taylor-Hood), natural inf-sup.
+
+### Steady Stokes verified
+- Q2/Q1 DG with UMFPACK: smooth velocity and pressure
+- Convergence: per-DOF |u| stable at ~0.21 across 3 refinements
+- Strong-form B, no pressure stabilization needed
+
+### Iterative Schur solver (completed)
+- Replaced UMFPACK with iterative Schur complement solve
+- Velocity: CG + BoomerAMG (strong threshold 0.1, Guermond)
+  - Converted deal.II SparseMatrix to PETSc for BoomerAMG
+  - 7 CG iterations per component (mesh-independent with AMG)
+- Pressure: FGMRES + block-diagonal Cahouet-Chabard
+  - P_CC = ν M_p^{-1} + 1/(γdt) L_p^{-1}, both element-local (DG)
+  - No AMG needed for pressure preconditioner (DG advantage)
+  - 14-22 FGMRES iterations
+- Performance: 1.8s total for 38k DOFs in Release mode
+
+### Time stepping (completed, Stokes only)
+- IMEX-Euler: explicit advection + implicit Stokes
+- Time loop with proper RHS: M_V u_n - dt N(u_n) + coeff × BC terms
+- PVD/VTU time series output (single .pvd file for ParaView)
+- Velocity and pressure in same VTU (pressure L2-projected to vel mesh)
+- Stokes (no advection): stable, smooth, physically reasonable
+
+### Advection operator (IN PROGRESS — blowing up)
+- Implemented Lax-Friedrichs DG flux on interior + boundary faces
+- BUG: used strong-form volume term `∫(u·∇)u · w` instead of
+  conservative DG form `-∫(u⊗u):∇w + ∫ F̂·n · w`
+- Strong form doesn't account for discontinuous fluxes at faces
+- Causes exponential blowup at any dt (even dt=0.001)
+- Fix: rewrite in conservative form with integration by parts
+
+### Next steps
+1. Fix advection: conservative DG form with IBP
+2. Verify stability with CFL-limited dt
+3. Upgrade to IMEX-ARK3 (3rd order, larger CFL)
+4. Longer runs, drag/lift computation
+5. Validation against Schafer-Turek

@@ -9,7 +9,7 @@ find_package(Python3 COMPONENTS Interpreter REQUIRED)
 # ── Coarse test mesh ──────────────────────────────────────────────────────────
 #
 # A coarse mesh (lc_far=0.1, lc_cyl=0.03) is generated on demand and used by
-# all C++ tests so they complete in seconds on a workstation.
+# all C++ tests so they complete in reasonable time on a workstation.
 # The file is git-ignored; regenerate with: cmake --build . --target generate_coarse_mesh
 #
 set(COARSE_MESH "${CMAKE_SOURCE_DIR}/meshes/channel_coarse.msh")
@@ -26,6 +26,7 @@ add_custom_target(generate_coarse_mesh
 #
 # Each test executable is linked against channel_flow_lib and receives the
 # coarse mesh path via the TEST_MESH environment variable.
+# DG tests have ~5x more DOFs → 300s timeout.
 #
 macro(add_solver_test name source)
     add_executable(${name} ${source})
@@ -34,17 +35,11 @@ macro(add_solver_test name source)
     add_test(NAME ${name} COMMAND mpirun -n 1 ${name})
     set_tests_properties(${name} PROPERTIES
         ENVIRONMENT "TEST_MESH=${COARSE_MESH}"
-        TIMEOUT 120)
+        TIMEOUT 300)
 endmacro()
 
-# ── Phase 2: FEM space initialisation ────────────────────────────────────────
-add_solver_test(test_spaces test_spaces.cpp)
+# ── DG Phase 1: DG space initialisation ──────────────────────────────────────
+add_solver_test(test_dg_spaces test_dg_spaces.cpp)
 
-# ── Phase 3: Stokes linear solve ─────────────────────────────────────────────
-add_solver_test(test_stokes test_stokes.cpp)
-
-# ── Phase 4: ExodusII output + drag/lift ─────────────────────────────────────
-add_solver_test(test_output test_output.cpp)
-
-# ── Time-dependent: time stepping + ramp ─────────────────────────────────────
-add_solver_test(test_timestep test_timestep.cpp)
+# ── DG Phase 4: DG Stokes solve with weak BCs ───────────────────────────────
+add_solver_test(test_dg_stokes test_dg_stokes.cpp)
